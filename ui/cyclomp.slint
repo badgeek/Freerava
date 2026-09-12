@@ -1,0 +1,220 @@
+// cyclomp — Bauhaus bike-computer dashboard (mock)
+// Shared UI: renders on desktop (C++ preview) and Android (C++ NDK / Slint android-activity).
+
+// ---- Bauhaus palette ----
+global Palette {
+    out property <color> ink: #0d0d0d;      // near-black background
+    out property <color> paper: #f4f1e9;    // bone white
+    out property <color> yellow: #f3c500;
+    out property <color> red: #e2231a;
+    out property <color> blue: #1457b8;
+    out property <color> ash: #2a2a2a;      // panel fill
+    out property <color> mute: #8a8a8a;
+}
+
+// A metric tile: small label on top, big value, small unit.
+component MetricTile inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <string> unit;
+    in property <color> accent: Palette.paper;
+    background: Palette.ash;
+    VerticalLayout {
+        padding: 12px;
+        spacing: 2px;
+        Text {
+            text: root.label;
+            color: Palette.mute;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 1px;
+        }
+        HorizontalLayout {
+            alignment: start;
+            spacing: 4px;
+            Text {
+                text: root.value;
+                color: root.accent;
+                font-size: 34px;
+                font-weight: 900;
+                vertical-alignment: center;
+            }
+            Text {
+                text: root.unit;
+                color: Palette.mute;
+                font-size: 13px;
+                font-weight: 700;
+                vertical-alignment: bottom;
+            }
+        }
+    }
+}
+
+// Turn-by-turn nav strip. Geometric arrow drawn with a Path.
+component NavStrip inherits Rectangle {
+    in property <string> instruction;
+    in property <string> distance;
+    background: Palette.yellow;
+    height: 76px;
+    HorizontalLayout {
+        padding: 16px;
+        spacing: 16px;
+        alignment: start;
+        // bold right-turn chevron
+        Rectangle {
+            width: 44px;
+            height: 44px;
+            y: (parent.height - self.height) / 2;
+            Path {
+                fill: Palette.ink;
+                commands: "M 10 30 L 30 30 L 30 12 L 44 32 L 30 52 L 30 40 L 10 40 Z";
+                viewbox-x: 0; viewbox-y: 0; viewbox-width: 54; viewbox-height: 64;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: root.distance;
+                color: Palette.ink;
+                font-size: 20px;
+                font-weight: 900;
+            }
+            Text {
+                text: root.instruction;
+                color: Palette.ink;
+                font-size: 13px;
+                font-weight: 700;
+            }
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "cyclomp";
+    background: Palette.ink;
+    default-font-size: 15px;
+    preferred-width: 400px;
+    preferred-height: 860px;
+
+    // ---- Live ride state (driven from C++) ----
+    in-out property <float> speed: 0;        // km/h
+    in-out property <string> distance: "0.0"; // km
+    in-out property <string> ride-time: "00:00";
+    in-out property <float> avg-speed: 0;
+    in-out property <int> cadence: 0;         // rpm
+    in-out property <int> heart-rate: 0;      // bpm
+    in-out property <int> hr-zone: 0;         // 1..5
+    in-out property <string> nav-distance: "400 m";
+    in-out property <string> nav-instruction: "Turn right — Elm St";
+    in-out property <bool> riding: false;
+
+    callback toggle-ride();
+
+    property <color> hr-color: root.hr-zone >= 4 ? Palette.red
+                             : root.hr-zone == 3 ? Palette.yellow
+                             : Palette.blue;
+
+    VerticalLayout {
+        NavStrip {
+            instruction: root.nav-instruction;
+            distance: root.nav-distance;
+        }
+
+        // ---- Speed hero ----
+        Rectangle {
+            vertical-stretch: 1;
+            background: Palette.ink;
+            VerticalLayout {
+                alignment: center;
+                spacing: 0px;
+                Text {
+                    text: "SPEED  km/h";
+                    color: Palette.mute;
+                    font-size: 13px;
+                    font-weight: 700;
+                    letter-spacing: 2px;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: Math.round(root.speed);
+                    color: Palette.paper;
+                    font-size: 150px;
+                    font-weight: 900;
+                    horizontal-alignment: center;
+                }
+                // Bauhaus accent bar under the number
+                Rectangle {
+                    height: 8px;
+                    width: 180px;
+                    background: Palette.red;
+                }
+            }
+        }
+
+        // ---- Core ride metrics row ----
+        HorizontalLayout {
+            spacing: 4px;
+            padding-left: 4px;
+            padding-right: 4px;
+            MetricTile {
+                horizontal-stretch: 1;
+                label: "DIST";
+                value: root.distance;
+                unit: "km";
+                accent: Palette.yellow;
+            }
+            MetricTile {
+                horizontal-stretch: 1;
+                label: "TIME";
+                value: root.ride-time;
+                unit: "";
+                accent: Palette.paper;
+            }
+            MetricTile {
+                horizontal-stretch: 1;
+                label: "AVG";
+                value: Math.round(root.avg-speed);
+                unit: "km/h";
+                accent: Palette.paper;
+            }
+        }
+
+        // ---- Cadence + heart rate ----
+        HorizontalLayout {
+            spacing: 4px;
+            padding: 4px;
+            MetricTile {
+                horizontal-stretch: 1;
+                label: "CADENCE";
+                value: root.cadence;
+                unit: "rpm";
+                accent: Palette.blue;
+            }
+            MetricTile {
+                horizontal-stretch: 1;
+                label: "HEART  Z\{root.hr-zone}";
+                value: root.heart-rate;
+                unit: "bpm";
+                accent: root.hr-color;
+            }
+        }
+
+        // ---- Start / pause ----
+        Rectangle {
+            height: 64px;
+            background: touch.pressed ? Palette.ash
+                      : root.riding ? Palette.red : Palette.blue;
+            touch := TouchArea {
+                clicked => { root.toggle-ride(); }
+            }
+            Text {
+                text: root.riding ? "PAUSE" : "START RIDE";
+                color: Palette.paper;
+                font-size: 20px;
+                font-weight: 900;
+                letter-spacing: 2px;
+            }
+        }
+    }
+}

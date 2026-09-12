@@ -1,0 +1,14 @@
+# build output
+build/
+.gradle/
+android/.cxx/
+android/build/
+*.apk
+
+# compiled artifacts
+*.o *.obj *.so *.dylib *.dll *.a *.lib *.exe *.out *.app
+
+# caches
+.cache
+.idea/
+local.properties
