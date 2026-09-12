@@ -115,7 +115,17 @@ export component AppWindow inherits Window {
                              : root.hr-zone == 3 ? Palette.yellow
                              : Palette.blue;
 
+    // Safe-area insets: system status bar (top) and gesture/nav bar (bottom)
+    // get their own dark strips so they stay visible over the black UI.
+    in-out property <length> top-inset: 44px;
+    in-out property <length> bottom-inset: 40px;
+
     VerticalLayout {
+        // status-bar inset
+        Rectangle {
+            height: root.top-inset;
+            background: Palette.ink;
+        }
         NavStrip {
             instruction: root.nav-instruction;
             distance: root.nav-distance;
@@ -215,6 +225,13 @@ export component AppWindow inherits Window {
                 font-weight: 900;
                 letter-spacing: 2px;
             }
+        }
+
+        // gesture/nav-bar inset: dark strip so the system pill stays visible
+        // and you can swipe/tap back to the home screen.
+        Rectangle {
+            height: root.bottom-inset;
+            background: Palette.ink;
         }
     }
 }
