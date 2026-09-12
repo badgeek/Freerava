@@ -1,6 +1,8 @@
 // cyclomp — Bauhaus bike-computer dashboard (mock)
 // Shared UI: renders on desktop (C++ preview) and Android (C++ NDK / Slint android-activity).
 
+import { ListView } from "std-widgets.slint";
+
 // ---- Bauhaus palette ----
 global Palette {
     out property <color> ink: #0d0d0d;      // near-black background
@@ -10,6 +12,17 @@ global Palette {
     out property <color> blue: #1457b8;
     out property <color> ash: #2a2a2a;      // panel fill
     out property <color> mute: #8a8a8a;
+}
+
+// A finished ride, provided by C++ (newest first).
+export struct SessionRow {
+    date: string,     // "07 SEP 14:32"
+    dist: string,     // km, one decimal
+    time: string,     // moving time mm:ss
+    avg: string,      // km/h
+    max: string,      // km/h
+    cadence: string,  // rpm
+    hr: string,       // bpm
 }
 
 // A metric tile: small label on top, big value, small unit.
@@ -90,6 +103,27 @@ component NavStrip inherits Rectangle {
     }
 }
 
+// A ride/pause/stop control button.
+component ControlButton inherits Rectangle {
+    in property <string> label;
+    in property <color> fill: Palette.blue;
+    in property <color> label-color: Palette.paper;
+    callback pressed();
+    background: touch.pressed ? Palette.ash : root.fill;
+    touch := TouchArea {
+        clicked => { root.pressed(); }
+    }
+    Text {
+        text: root.label;
+        color: root.label-color;
+        font-size: 20px;
+        font-weight: 900;
+        letter-spacing: 2px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
 export component AppWindow inherits Window {
     title: "cyclomp";
     background: Palette.ink;
@@ -107,9 +141,19 @@ export component AppWindow inherits Window {
     in-out property <int> hr-zone: 0;         // 1..5
     in-out property <string> nav-distance: "400 m";
     in-out property <string> nav-instruction: "Turn right — Elm St";
-    in-out property <bool> riding: false;
 
-    callback toggle-ride();
+    // Session lifecycle: 0 = idle, 1 = running, 2 = paused.
+    in-out property <int> ride-state: 0;
+
+    // Saved rides, newest first (C++ owns the model).
+    in property <[SessionRow]> sessions;
+
+    // 0 = live dashboard, 1 = history list.
+    in-out property <int> screen: 0;
+    in-out property <int> selected-session: -1;
+
+    callback toggle-ride();  // idle->start, running->pause, paused->resume
+    callback stop-ride();    // finalize + save session
 
     property <color> hr-color: root.hr-zone >= 4 ? Palette.red
                              : root.hr-zone == 3 ? Palette.yellow
@@ -126,104 +170,311 @@ export component AppWindow inherits Window {
             height: root.top-inset;
             background: Palette.ink;
         }
-        NavStrip {
-            instruction: root.nav-instruction;
-            distance: root.nav-distance;
+
+        // ================= DASHBOARD =================
+        if root.screen == 0 : VerticalLayout {
+            vertical-stretch: 1;
+            NavStrip {
+                instruction: root.nav-instruction;
+                distance: root.nav-distance;
+            }
+
+            // ---- Speed hero ----
+            Rectangle {
+                vertical-stretch: 1;
+                background: Palette.ink;
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 0px;
+                    Text {
+                        text: root.ride-state == 2 ? "PAUSED" : "SPEED  km/h";
+                        color: root.ride-state == 2 ? Palette.yellow : Palette.mute;
+                        font-size: 13px;
+                        font-weight: 700;
+                        letter-spacing: 2px;
+                        horizontal-alignment: center;
+                    }
+                    Text {
+                        text: Math.round(root.speed);
+                        color: root.ride-state == 2 ? Palette.mute : Palette.paper;
+                        font-size: 150px;
+                        font-weight: 900;
+                        horizontal-alignment: center;
+                    }
+                    // Bauhaus accent bar under the number
+                    HorizontalLayout {
+                        alignment: center;
+                        Rectangle {
+                            height: 8px;
+                            width: 180px;
+                            background: Palette.red;
+                        }
+                    }
+                }
+            }
+
+            // ---- Core ride metrics row ----
+            HorizontalLayout {
+                spacing: 4px;
+                padding-left: 4px;
+                padding-right: 4px;
+                MetricTile {
+                    horizontal-stretch: 1;
+                    label: "DIST";
+                    value: root.distance;
+                    unit: "km";
+                    accent: Palette.yellow;
+                }
+                MetricTile {
+                    horizontal-stretch: 1;
+                    label: "TIME";
+                    value: root.ride-time;
+                    unit: "";
+                    accent: Palette.paper;
+                }
+                MetricTile {
+                    horizontal-stretch: 1;
+                    label: "AVG";
+                    value: Math.round(root.avg-speed);
+                    unit: "km/h";
+                    accent: Palette.paper;
+                }
+            }
+
+            // ---- Cadence + heart rate ----
+            HorizontalLayout {
+                spacing: 4px;
+                padding: 4px;
+                MetricTile {
+                    horizontal-stretch: 1;
+                    label: "CADENCE";
+                    value: root.cadence;
+                    unit: "rpm";
+                    accent: Palette.blue;
+                }
+                MetricTile {
+                    horizontal-stretch: 1;
+                    label: "HEART  Z\{root.hr-zone}";
+                    value: root.heart-rate;
+                    unit: "bpm";
+                    accent: root.hr-color;
+                }
+            }
+
+            // ---- Ride controls: START / PAUSE+STOP / RESUME+STOP ----
+            HorizontalLayout {
+                height: 64px;
+                spacing: root.ride-state == 0 ? 0px : 4px;
+                if root.ride-state == 0 : ControlButton {
+                    horizontal-stretch: 1;
+                    label: "START RIDE";
+                    fill: Palette.blue;
+                    pressed => { root.toggle-ride(); }
+                }
+                if root.ride-state != 0 : ControlButton {
+                    horizontal-stretch: 1;
+                    label: root.ride-state == 1 ? "PAUSE" : "RESUME";
+                    fill: root.ride-state == 1 ? Palette.yellow : Palette.blue;
+                    label-color: root.ride-state == 1 ? Palette.ink : Palette.paper;
+                    pressed => { root.toggle-ride(); }
+                }
+                if root.ride-state != 0 : ControlButton {
+                    horizontal-stretch: 1;
+                    label: "STOP";
+                    fill: Palette.red;
+                    pressed => { root.stop-ride(); }
+                }
+            }
         }
 
-        // ---- Speed hero ----
-        Rectangle {
+        // ================= HISTORY =================
+        if root.screen == 1 : VerticalLayout {
             vertical-stretch: 1;
-            background: Palette.ink;
-            VerticalLayout {
-                alignment: center;
-                spacing: 0px;
+
+            // header
+            Rectangle {
+                height: 76px;
+                background: Palette.ink;
+                HorizontalLayout {
+                    padding: 16px;
+                    spacing: 12px;
+                    alignment: start;
+                    Rectangle {
+                        width: 18px;
+                        height: 18px;
+                        y: (parent.height - self.height) / 2;
+                        background: Palette.red;
+                    }
+                    Text {
+                        text: "RIDES";
+                        color: Palette.paper;
+                        font-size: 28px;
+                        font-weight: 900;
+                        letter-spacing: 2px;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.sessions.length;
+                        color: Palette.mute;
+                        font-size: 16px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            if root.sessions.length == 0 : Rectangle {
+                vertical-stretch: 1;
+                background: Palette.ink;
                 Text {
-                    text: "SPEED  km/h";
+                    text: "NO RIDES YET";
                     color: Palette.mute;
-                    font-size: 13px;
+                    font-size: 16px;
                     font-weight: 700;
                     letter-spacing: 2px;
                     horizontal-alignment: center;
+                    vertical-alignment: center;
                 }
-                Text {
-                    text: Math.round(root.speed);
-                    color: Palette.paper;
-                    font-size: 150px;
-                    font-weight: 900;
-                    horizontal-alignment: center;
-                }
-                // Bauhaus accent bar under the number
-                Rectangle {
-                    height: 8px;
-                    width: 180px;
-                    background: Palette.red;
+            }
+
+            if root.sessions.length > 0 : ListView {
+                vertical-stretch: 1;
+                for s[i] in root.sessions : Rectangle {
+                    height: root.selected-session == i ? 112px : 86px;
+                    background: Palette.ink;
+                    Rectangle {
+                        x: 4px;
+                        y: 2px;
+                        width: parent.width - 8px;
+                        height: parent.height - 4px;
+                        background: Palette.ash;
+                        TouchArea {
+                            clicked => {
+                                root.selected-session =
+                                    root.selected-session == i ? -1 : i;
+                            }
+                        }
+                        VerticalLayout {
+                            padding: 12px;
+                            spacing: 6px;
+                            HorizontalLayout {
+                                spacing: 12px;
+                                // Bauhaus marker: primary colors cycling by row
+                                Rectangle {
+                                    width: 12px;
+                                    height: 12px;
+                                    y: 6px;
+                                    background: Math.mod(i, 3) == 0 ? Palette.yellow
+                                              : Math.mod(i, 3) == 1 ? Palette.red
+                                              : Palette.blue;
+                                }
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    spacing: 2px;
+                                    Text {
+                                        text: s.date;
+                                        color: Palette.mute;
+                                        font-size: 11px;
+                                        font-weight: 700;
+                                        letter-spacing: 1px;
+                                    }
+                                    Text {
+                                        text: "\{s.dist} km";
+                                        color: Palette.paper;
+                                        font-size: 24px;
+                                        font-weight: 900;
+                                    }
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    spacing: 2px;
+                                    Text {
+                                        text: s.time;
+                                        color: Palette.paper;
+                                        font-size: 16px;
+                                        font-weight: 900;
+                                        horizontal-alignment: right;
+                                    }
+                                    Text {
+                                        text: "AVG \{s.avg} km/h";
+                                        color: Palette.mute;
+                                        font-size: 12px;
+                                        font-weight: 700;
+                                        horizontal-alignment: right;
+                                    }
+                                }
+                            }
+                            if root.selected-session == i : HorizontalLayout {
+                                spacing: 16px;
+                                Text {
+                                    text: "MAX \{s.max} km/h";
+                                    color: Palette.yellow;
+                                    font-size: 12px;
+                                    font-weight: 700;
+                                }
+                                Text {
+                                    text: "CAD \{s.cadence} rpm";
+                                    color: Palette.blue;
+                                    font-size: 12px;
+                                    font-weight: 700;
+                                }
+                                Text {
+                                    text: "HR \{s.hr} bpm";
+                                    color: Palette.red;
+                                    font-size: 12px;
+                                    font-weight: 700;
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        // ---- Core ride metrics row ----
+        // ---- Tab bar: RIDE | HISTORY ----
         HorizontalLayout {
-            spacing: 4px;
-            padding-left: 4px;
-            padding-right: 4px;
-            MetricTile {
-                horizontal-stretch: 1;
-                label: "DIST";
-                value: root.distance;
-                unit: "km";
-                accent: Palette.yellow;
+            height: 52px;
+            Rectangle {
+                background: root.screen == 0 ? Palette.ash : Palette.ink;
+                TouchArea {
+                    clicked => { root.screen = 0; }
+                }
+                VerticalLayout {
+                    Rectangle {
+                        height: 4px;
+                        background: root.screen == 0 ? Palette.yellow : transparent;
+                    }
+                    Text {
+                        text: "RIDE";
+                        color: root.screen == 0 ? Palette.paper : Palette.mute;
+                        font-size: 14px;
+                        font-weight: 900;
+                        letter-spacing: 2px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
             }
-            MetricTile {
-                horizontal-stretch: 1;
-                label: "TIME";
-                value: root.ride-time;
-                unit: "";
-                accent: Palette.paper;
-            }
-            MetricTile {
-                horizontal-stretch: 1;
-                label: "AVG";
-                value: Math.round(root.avg-speed);
-                unit: "km/h";
-                accent: Palette.paper;
-            }
-        }
-
-        // ---- Cadence + heart rate ----
-        HorizontalLayout {
-            spacing: 4px;
-            padding: 4px;
-            MetricTile {
-                horizontal-stretch: 1;
-                label: "CADENCE";
-                value: root.cadence;
-                unit: "rpm";
-                accent: Palette.blue;
-            }
-            MetricTile {
-                horizontal-stretch: 1;
-                label: "HEART  Z\{root.hr-zone}";
-                value: root.heart-rate;
-                unit: "bpm";
-                accent: root.hr-color;
-            }
-        }
-
-        // ---- Start / pause ----
-        Rectangle {
-            height: 64px;
-            background: touch.pressed ? Palette.ash
-                      : root.riding ? Palette.red : Palette.blue;
-            touch := TouchArea {
-                clicked => { root.toggle-ride(); }
-            }
-            Text {
-                text: root.riding ? "PAUSE" : "START RIDE";
-                color: Palette.paper;
-                font-size: 20px;
-                font-weight: 900;
-                letter-spacing: 2px;
+            Rectangle {
+                background: root.screen == 1 ? Palette.ash : Palette.ink;
+                TouchArea {
+                    clicked => { root.screen = 1; }
+                }
+                VerticalLayout {
+                    Rectangle {
+                        height: 4px;
+                        background: root.screen == 1 ? Palette.yellow : transparent;
+                    }
+                    Text {
+                        text: "HISTORY";
+                        color: root.screen == 1 ? Palette.paper : Palette.mute;
+                        font-size: 14px;
+                        font-weight: 900;
+                        letter-spacing: 2px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
             }
         }
 
