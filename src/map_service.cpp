@@ -12,11 +12,17 @@
 #include <mutex>
 #include <thread>
 
+// Per-frame tracing, off unless -DCYCLOMP_MAP_VERBOSE=ON.
+#if defined(CYCLOMP_MAP_VERBOSE)
 #ifdef __ANDROID__
 #include <android/log.h>
 #define MAP_LOG(...) __android_log_print(ANDROID_LOG_INFO, "cyclomp-map", __VA_ARGS__)
 #else
+#include <cstdio>
 #define MAP_LOG(...) std::fprintf(stderr, __VA_ARGS__)
+#endif
+#else
+#define MAP_LOG(...) ((void)0)
 #endif
 
 namespace {

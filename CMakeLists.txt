@@ -32,8 +32,17 @@ slint_target_sources(cyclomp ui/cyclomp.slint)
 # ---- Optional MapLibre map (mbgl core embedded, no Java SDK) ----
 # Expects a maplibre-native checkout with prebuilt cores:
 #   build-macos-metal/  (desktop)   build-android/  (arm64-v8a)
-set(CYCLOMP_MLN_DIR "/tmp/maplibre-native" CACHE PATH
+# Produce it with scripts/build-maplibre.sh (see docs/maplibre.md). The map
+# is simply left out of the build when the directory isn't there.
+set(CYCLOMP_MLN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../deps/maplibre-native" CACHE PATH
     "maplibre-native checkout containing prebuilt core libraries")
+
+# Compile in the chatty per-frame / per-request map logs (tags cyclomp-map,
+# cyclomp-http). mbgl's own error channel stays on regardless.
+option(CYCLOMP_MAP_VERBOSE "Verbose MapLibre logging" OFF)
+if(CYCLOMP_MAP_VERBOSE)
+    target_compile_definitions(cyclomp PRIVATE CYCLOMP_MAP_VERBOSE)
+endif()
 set(_mln_vendor_includes
     ${CYCLOMP_MLN_DIR}/vendor/expected-lite/include
     ${CYCLOMP_MLN_DIR}/vendor/maplibre-native-base/include

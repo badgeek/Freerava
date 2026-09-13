@@ -17,6 +17,9 @@ requires real sensors. Tap **START RIDE** to animate.
 cyclomp/
 ├── ui/cyclomp.slint      # shared UI markup
 ├── src/main.cpp          # mock ride driver (desktop main() + Android slint_main())
+├── src/map_service.*     # off-screen MapLibre renderer (MAP tab)
+├── scripts/              # build-maplibre.sh — builds the mbgl cores
+├── docs/maplibre.md      # the map dependency, in detail
 ├── CMakeLists.txt        # desktop exe / android shared lib
 └── android/              # Gradle wrapper around the CMake project
 ```
@@ -31,6 +34,18 @@ cmake -B build
 cmake --build build        # first build is slow (Slint + Skia compile once)
 ./build/cyclomp
 ```
+
+## Map tab (MapLibre Native, optional)
+
+The MAP tab embeds MapLibre's C++ core (`mbgl`) — no Java SDK — and needs a
+locally built checkout in `../deps/maplibre-native`:
+
+```bash
+./scripts/build-maplibre.sh        # both platforms; or: macos | android
+```
+
+Without it the app still builds; the MAP tab just shows a placeholder. Details,
+overrides and the `-DCYCLOMP_MAP_VERBOSE=ON` log switch: [docs/maplibre.md](docs/maplibre.md).
 
 ## Android APK (C++ NDK)
 

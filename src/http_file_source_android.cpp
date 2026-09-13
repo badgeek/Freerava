@@ -22,6 +22,14 @@
 #include <string>
 #include <thread>
 
+// Per-request tracing, off unless -DCYCLOMP_MAP_VERBOSE=ON. (The
+// Log::platformRecord sink below is mbgl's own error channel and stays on.)
+#if defined(CYCLOMP_MAP_VERBOSE)
+#define HTTP_LOG(...) __android_log_print(ANDROID_LOG_INFO, "cyclomp-http", __VA_ARGS__)
+#else
+#define HTTP_LOG(...) ((void)0)
+#endif
+
 namespace mln {
 
 // The Java SDK normally provides the log sink; route to logcat directly.
@@ -77,8 +85,7 @@ private:
 
 // Blocking HTTP GET via JNI. Runs on a detached worker thread.
 Response fetch(const Resource &resource) {
-    __android_log_print(ANDROID_LOG_INFO, "cyclomp-http", "GET %s",
-                        resource.url.c_str());
+    HTTP_LOG("GET %s", resource.url.c_str());
     Response out;
     auto fail = [&out](Response::Error::Reason reason, const char *msg) {
         out.error = std::make_unique<Response::Error>(reason, msg);
