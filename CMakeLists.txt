@@ -10,6 +10,7 @@ option(CYCLOMP_BUILD_APP "Build the Slint app target" ON)
 # Unit-tested below; the OFF app lane proves it never touches Slint.
 add_library(cyclomp_core STATIC
     src/core/format.cpp
+    src/core/geojson.cpp
     src/core/mock_telemetry.cpp
     src/core/ride_engine.cpp
     src/core/session_db.cpp
@@ -189,6 +190,7 @@ if(NOT ANDROID)
             tests/test_follow_camera.cpp
             tests/test_settings.cpp
             tests/test_session_db.cpp
+            tests/test_geojson.cpp
             tests/test_track.cpp)
         target_link_libraries(cyclomp_tests PRIVATE cyclomp_core doctest::doctest)
         add_test(NAME cyclomp_tests COMMAND cyclomp_tests)

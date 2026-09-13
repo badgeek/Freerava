@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CYCLOMP // RIDE VISUALISER</title>
+<!--
+  Standalone Three.js viewer for a cyclomp ride export. Drag a .geojson
+  produced by the app's EXPORT button onto the window (or click to pick one).
+  Route is drawn in 3D, elevation as height, colour by speed (a single-hue
+  phosphor lightness ramp — slow = faded, fast = bright), with a fly-through
+  reveal and a glowing head. No build step; open the file in a browser
+  (needs internet once for the Three.js CDN).
+-->
+<style>
+  :root {
+    --ink: #030503; --panel: #060d07; --line: #1b4527;
+    --dim: #2f7a42; --phos: #4dff70; --amber: #ffb000;
+    --cyan: #23b5aa; --red: #ff3b2f;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--ink); overflow: hidden;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: var(--phos); }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; }
+
+  .hud { position: fixed; pointer-events: none; text-transform: uppercase;
+    letter-spacing: 2px; }
+  #title { top: 18px; left: 20px; font-size: 15px; font-weight: 900; }
+  #title .sub { color: var(--dim); font-size: 10px; letter-spacing: 3px; }
+
+  /* Stat tiles */
+  #stats { top: 60px; left: 20px; display: grid; grid-template-columns: repeat(3, 96px);
+    gap: 8px; }
+  .tile { background: rgba(6,13,7,.72); border: 1px solid var(--line); padding: 8px 10px; }
+  .tile .k { color: var(--dim); font-size: 9px; letter-spacing: 2px; }
+  .tile .v { font-size: 22px; font-weight: 900; line-height: 1.05; }
+  .tile .u { color: var(--dim); font-size: 9px; }
+  .tile.amber .v { color: var(--amber); } .tile.cyan .v { color: var(--cyan); }
+  .tile.red .v { color: var(--red); }
+
+  /* Speed legend */
+  #legend { bottom: 92px; left: 20px; width: 220px; }
+  #legend .bar { height: 10px; border: 1px solid var(--line);
+    background: linear-gradient(90deg, #2f7a42, #4dff70, #d8ffe4); }
+  #legend .row { display: flex; justify-content: space-between; color: var(--dim);
+    font-size: 9px; letter-spacing: 1px; margin-top: 4px; }
+
+  /* Transport controls */
+  #transport { position: fixed; left: 20px; right: 20px; bottom: 24px;
+    display: flex; align-items: center; gap: 12px; pointer-events: auto; }
+  button { font: inherit; text-transform: uppercase; letter-spacing: 2px;
+    font-weight: 900; font-size: 12px; color: var(--phos); background: transparent;
+    border: 1px solid var(--phos); padding: 8px 12px; cursor: pointer; }
+  button:hover { background: var(--phos); color: var(--ink); }
+  button.off { color: var(--dim); border-color: var(--line); }
+  #scrub { flex: 1; accent-color: var(--phos); height: 4px; }
+  #clock { color: var(--amber); font-size: 13px; font-weight: 900; min-width: 62px;
+    text-align: right; }
+  .ctl { display: flex; align-items: center; gap: 6px; color: var(--dim);
+    font-size: 10px; letter-spacing: 1px; }
+  .ctl input[type=range] { width: 90px; accent-color: var(--cyan); }
+
+  /* Drop / empty state */
+  #drop { position: fixed; inset: 0; display: flex; align-items: center;
+    justify-content: center; flex-direction: column; gap: 14px; text-align: center;
+    background: rgba(3,5,3,.86); z-index: 5; cursor: pointer; }
+  #drop.hide { display: none; }
+  #drop .big { font-size: 22px; font-weight: 900; letter-spacing: 3px; }
+  #drop .small { color: var(--dim); font-size: 11px; letter-spacing: 2px; max-width: 420px; }
+  #drop .frame { border: 1px dashed var(--line); padding: 40px 54px; }
+  body.dragging #drop { background: rgba(6,13,7,.94); }
+  body.dragging #drop .frame { border-color: var(--phos); }
+  #err { color: var(--red); font-size: 11px; min-height: 14px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<div id="title" class="hud">CYCLOMP // RIDE VISUALISER<div class="sub" id="date">— NO RIDE LOADED —</div></div>
+<div id="stats" class="hud" style="display:none">
+  <div class="tile"><div class="k">DIST</div><div class="v" id="s-dist">0.0</div><div class="u">KM</div></div>
+  <div class="tile amber"><div class="k">TIME</div><div class="v" id="s-time">00:00</div><div class="u">MM:SS</div></div>
+  <div class="tile"><div class="k">AVG</div><div class="v" id="s-avg">0</div><div class="u">KM/H</div></div>
+  <div class="tile amber"><div class="k">MAX</div><div class="v" id="s-max">0</div><div class="u">KM/H</div></div>
+  <div class="tile"><div class="k">CLIMB</div><div class="v" id="s-elev">0</div><div class="u">M</div></div>
+  <div class="tile red"><div class="k">AVG HR</div><div class="v" id="s-hr">--</div><div class="u">BPM</div></div>
+</div>
+
+<div id="legend" class="hud" style="display:none">
+  <div style="color:var(--dim);font-size:9px;letter-spacing:2px;margin-bottom:4px">SPEED</div>
+  <div class="bar"></div>
+  <div class="row"><span id="lg-min">0</span><span>KM/H</span><span id="lg-max">0</span></div>
+</div>
+
+<div id="transport" style="display:none">
+  <button id="play">► PLAY</button>
+  <input id="scrub" type="range" min="0" max="1000" value="1000" />
+  <span id="clock">00:00</span>
+  <button id="follow" class="off">CHASE CAM</button>
+  <span class="ctl">RELIEF <input id="exag" type="range" min="0" max="40" value="12" /></span>
+</div>
+
+<div id="drop">
+  <div class="frame">
+    <div class="big">DROP RIDE .GEOJSON</div>
+    <div class="small">Export a ride from cyclomp (LOG → open a ride → EXPORT), then drop the
+      file here or click to choose it.</div>
+    <div id="err"></div>
+  </div>
+  <input id="file" type="file" accept=".geojson,.json,application/geo+json" style="display:none" />
+</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+} }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { Line2 } from 'three/addons/lines/Line2.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
+
+const COL = { ink:0x030503, dim:0x2f7a42, phos:0x4dff70, amber:0xffb000,
+              red:0xff3b2f, line:0x1b4527, hot:0xd8ffe4 };
+
+// ---- scene ----
+const app = document.getElementById('app');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+app.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(COL.ink);
+scene.fog = new THREE.Fog(COL.ink, 300, 2600);
+
+const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 20000);
+camera.position.set(300, 320, 480);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+
+scene.add(new THREE.AmbientLight(0x88ffaa, 0.5));
+const headLight = new THREE.PointLight(COL.phos, 2.4, 900, 2);
+scene.add(headLight);
+
+// Nostromo grid + faint ground.
+const grid = new THREE.GridHelper(4000, 80, COL.line, 0x0e2417);
+grid.material.transparent = true; grid.material.opacity = 0.55;
+scene.add(grid);
+
+// ---- ride state ----
+let ride = null;         // { P:[Vec3], cumT:[], cumD:[], vNorm:[], colors:Float32,
+                         //   route:Line2, head, startDot, endDot, total, tMin,tMax, box }
+let playing = false, headT = 1, follow = false, exag = 12;
+
+function clearRide() {
+  if (!ride) return;
+  for (const o of [ride.route, ride.head, ride.startDot, ride.endDot, ride.glow])
+    if (o) { scene.remove(o); o.geometry?.dispose?.(); o.material?.dispose?.(); }
+  ride = null;
+}
+
+// Single-hue phosphor lightness ramp: slow = faded green, fast = bright/white.
+const c1 = new THREE.Color(COL.dim), c2 = new THREE.Color(COL.phos), c3 = new THREE.Color(COL.hot);
+function speedColor(v, out) {
+  if (v < 0.5) out.copy(c1).lerp(c2, v / 0.5);
+  else out.copy(c2).lerp(c3, (v - 0.5) / 0.5);
+  return out;
+}
+
+function project(coords) {
+  // Equirectangular metres around the centroid; north = -Z, up = +Y.
+  let lat0 = 0, lon0 = 0;
+  for (const c of coords) { lon0 += c[0]; lat0 += c[1]; }
+  lon0 /= coords.length; lat0 /= coords.length;
+  const kx = Math.cos(lat0 * Math.PI / 180) * 111320, kz = 110540;
+  let altMin = Infinity;
+  for (const c of coords) altMin = Math.min(altMin, c[2] ?? 0);
+  return coords.map(c => new THREE.Vector3(
+    (c[0] - lon0) * kx, ((c[2] ?? 0) - altMin), -(c[1] - lat0) * kz));
+}
+
+function buildRide(gj) {
+  clearRide();
+  const feat = (gj.features || []).find(f => f.geometry?.type === 'LineString');
+  if (!feat) throw new Error('no LineString feature in this GeoJSON');
+  const coords = feat.geometry.coordinates;
+  if (coords.length < 2) throw new Error('track has fewer than 2 points');
+  const speed = feat.properties?.speed_kmh || coords.map(() => 0);
+  const tArr = feat.properties?.t_s || coords.map((_, i) => i);
+
+  const P = project(coords);
+  const vMax = Math.max(1e-3, ...speed), vMin = Math.min(...speed);
+  const vNorm = speed.map(s => (s - vMin) / Math.max(1e-3, vMax - vMin));
+
+  // Cumulative distance (for the head) and the elevation-applied points.
+  const cumD = [0];
+  for (let i = 1; i < P.length; i++) cumD.push(cumD[i - 1] + P[i].distanceTo(P[i - 1]));
+
+  const g = { P, speed, tArr, vNorm, vMin, vMax, cumD,
+              tMin: tArr[0], tMax: tArr[tArr.length - 1],
+              summary: gj.properties || {} };
+  ride = g;
+
+  rebuildGeometry(); // positions depend on the relief slider
+
+  // Start (green) + end (amber) markers, head glow.
+  const dot = (color, r) => {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 16),
+      new THREE.MeshBasicMaterial({ color }));
+    scene.add(m); return m;
+  };
+  g.startDot = dot(COL.phos, 6);
+  g.endDot = dot(COL.amber, 6);
+  g.head = dot(COL.hot, 5);
+  const glow = new THREE.Sprite(new THREE.SpriteMaterial({
+    color: COL.phos, transparent: true, opacity: 0.5, depthWrite: false,
+    blending: THREE.AdditiveBlending }));
+  glow.scale.set(46, 46, 1); scene.add(glow); g.glow = glow;
+
+  frameCamera();
+  headT = 1; setProgress(1);
+  showChrome(g.summary, vMin, vMax);
+}
+
+function rebuildGeometry() {
+  const g = ride; if (!g) return;
+  const pts = g.P.map(p => new THREE.Vector3(p.x, p.y * exag, p.z));
+  g.drawn = pts;
+
+  const pos = new Float32Array(pts.length * 3);
+  const col = new Float32Array(pts.length * 3);
+  const tmp = new THREE.Color();
+  for (let i = 0; i < pts.length; i++) {
+    pos[i * 3] = pts[i].x; pos[i * 3 + 1] = pts[i].y; pos[i * 3 + 2] = pts[i].z;
+    speedColor(g.vNorm[i], tmp);
+    col[i * 3] = tmp.r; col[i * 3 + 1] = tmp.g; col[i * 3 + 2] = tmp.b;
+  }
+  const geo = new LineGeometry();
+  geo.setPositions(pos); geo.setColors(col);
+  if (g.route) { scene.remove(g.route); g.route.geometry.dispose(); }
+  const mat = new LineMaterial({ vertexColors: true, linewidth: 4.5,
+    worldUnits: false, dashed: false, transparent: true });
+  mat.resolution.set(innerWidth, innerHeight);
+  const line = new Line2(geo, mat);
+  line.computeLineDistances();
+  scene.add(line); g.route = line; g.mat = mat; g.segCount = pts.length - 1;
+
+  if (g.startDot) g.startDot.position.copy(pts[0]);
+  if (g.endDot) g.endDot.position.copy(pts[pts.length - 1]);
+  setProgress(headT);
+}
+
+function frameCamera() {
+  const box = new THREE.Box3().setFromPoints(ride.drawn);
+  const c = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  const d = Math.max(size.x, size.z, size.y) * 1.7 + 120;
+  controls.target.copy(c);
+  camera.position.set(c.x + d * 0.55, c.y + d * 0.7, c.z + d * 0.75);
+  camera.near = d / 200; camera.far = d * 40; camera.updateProjectionMatrix();
+}
+
+// Position along the reveal, driven by time fraction 0..1.
+function setProgress(frac) {
+  const g = ride; if (!g) return;
+  headT = Math.min(1, Math.max(0, frac));
+  // Segment revealed count (draw-on flyover).
+  const seg = Math.max(1, Math.round(g.segCount * headT));
+  g.route.geometry.instanceCount = seg;
+
+  // Head position by time (t_s), so pauses read naturally.
+  const t = g.tMin + (g.tMax - g.tMin) * headT;
+  let i = 1; while (i < g.tArr.length && g.tArr[i] < t) i++;
+  const a = g.drawn[i - 1], b = g.drawn[Math.min(i, g.drawn.length - 1)];
+  const ta = g.tArr[i - 1], tb = g.tArr[Math.min(i, g.tArr.length - 1)];
+  const f = tb > ta ? (t - ta) / (tb - ta) : 0;
+  const hp = a.clone().lerp(b, f);
+  g.head.position.copy(hp); g.glow.position.copy(hp); headLight.position.copy(hp);
+
+  document.getElementById('scrub').value = String(Math.round(headT * 1000));
+  document.getElementById('clock').textContent = mmss(t);
+  if (follow) {
+    const off = new THREE.Vector3(80, 120, 140);
+    controls.target.lerp(hp, 0.12);
+    camera.position.lerp(hp.clone().add(off), 0.08);
+  }
+}
+
+function mmss(s) {
+  s = Math.max(0, Math.round(s));
+  return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+}
+
+function showChrome(sum, vMin, vMax) {
+  document.getElementById('stats').style.display = 'grid';
+  document.getElementById('legend').style.display = 'block';
+  document.getElementById('transport').style.display = 'flex';
+  const d = sum.ended_at ? new Date(sum.ended_at * 1000) : null;
+  document.getElementById('date').textContent = d
+    ? 'SORTIE // ' + d.toISOString().slice(0, 16).replace('T', ' ') : 'RIDE LOADED';
+  const set = (id, v) => document.getElementById(id).textContent = v;
+  set('s-dist', (sum.dist_km ?? 0).toFixed(1));
+  set('s-time', mmss(sum.moving_s ?? 0));
+  set('s-avg', Math.round(sum.avg_kmh ?? 0));
+  set('s-max', Math.round(sum.max_kmh ?? 0));
+  set('s-elev', Math.round(climb(ride.P)));
+  set('s-hr', sum.has_hr ? Math.round(sum.avg_hr) : '--');
+  set('lg-min', Math.round(vMin)); set('lg-max', Math.round(vMax));
+}
+
+function climb(P) { // positive vertical steps (raw metres, pre-exaggeration)
+  let g = 0; for (let i = 1; i < P.length; i++) { const d = P[i].y - P[i - 1].y; if (d > 0.3) g += d; }
+  return g;
+}
+
+// ---- loading ----
+function loadText(txt) {
+  document.getElementById('err').textContent = '';
+  try {
+    buildRide(JSON.parse(txt));
+    document.getElementById('drop').classList.add('hide');
+    playing = true; document.getElementById('play').textContent = '❚❚ PAUSE';
+  } catch (e) {
+    document.getElementById('err').textContent = 'COULD NOT READ: ' + e.message;
+  }
+}
+function loadFile(file) {
+  const r = new FileReader();
+  r.onload = () => loadText(String(r.result));
+  r.readAsText(file);
+}
+
+// ---- interaction ----
+const drop = document.getElementById('drop'), fileInput = document.getElementById('file');
+drop.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', e => { if (e.target.files[0]) loadFile(e.target.files[0]); });
+addEventListener('dragover', e => { e.preventDefault(); document.body.classList.add('dragging'); });
+addEventListener('dragleave', e => { if (e.target === document.body) document.body.classList.remove('dragging'); });
+addEventListener('drop', e => {
+  e.preventDefault(); document.body.classList.remove('dragging');
+  const f = e.dataTransfer.files[0]; if (f) loadFile(f);
+});
+
+document.getElementById('play').addEventListener('click', () => {
+  if (!ride) return;
+  if (headT >= 1) headT = 0;        // replay from the start
+  playing = !playing;
+  document.getElementById('play').textContent = playing ? '❚❚ PAUSE' : '► PLAY';
+});
+document.getElementById('scrub').addEventListener('input', e => {
+  playing = false; document.getElementById('play').textContent = '► PLAY';
+  setProgress(Number(e.target.value) / 1000);
+});
+document.getElementById('follow').addEventListener('click', e => {
+  follow = !follow; e.target.classList.toggle('off', !follow);
+  if (!follow && ride) frameCamera();
+});
+document.getElementById('exag').addEventListener('input', e => {
+  exag = Number(e.target.value); if (ride) { rebuildGeometry(); }
+});
+
+// ---- loop ----
+let last = performance.now();
+function animate(now) {
+  requestAnimationFrame(animate);
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (ride && playing) {
+    const dur = Math.max(4, (ride.tMax - ride.tMin) / 6); // ~6x real time, min 4s
+    headT += dt / dur;
+    if (headT >= 1) { headT = 1; playing = false; document.getElementById('play').textContent = '► PLAY'; }
+    setProgress(headT);
+  }
+  controls.update();
+  renderer.render(scene, camera);
+}
+requestAnimationFrame(animate);
+
+function resize() {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  if (ride?.mat) ride.mat.resolution.set(innerWidth, innerHeight);
+}
+addEventListener('resize', resize); resize();
+</script>
+</body>
+</html>

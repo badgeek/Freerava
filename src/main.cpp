@@ -6,6 +6,7 @@
 
 #include "core/follow_camera.h"
 #include "core/format.h"
+#include "core/geojson.h"
 #include "core/mock_telemetry.h"
 #include "core/ride_engine.h"
 #include "core/session_db.h"
@@ -140,6 +141,22 @@ std::string db_path() {
 #else
     const char *h = std::getenv("HOME");
     return std::string(h ? h : ".") + "/.cyclomp.db";
+#endif
+}
+
+// Per-ride GeoJSON export. Android: an app-files subfolder (pull with
+// `adb shell run-as dev.bauhouse.cyclomp cat files/exports/<name>`); desktop:
+// the home dir. Returns the full path for the given ride timestamp.
+std::string export_path(std::time_t ended_at, std::string *name_out = nullptr) {
+    std::string name = "ride_" + std::to_string((long long)ended_at) + ".geojson";
+    if (name_out) *name_out = name;
+#ifdef __ANDROID__
+    ::mkdir("/data/data/dev.bauhouse.cyclomp/files", 0700);
+    ::mkdir("/data/data/dev.bauhouse.cyclomp/files/exports", 0700);
+    return "/data/data/dev.bauhouse.cyclomp/files/exports/" + name;
+#else
+    const char *h = std::getenv("HOME");
+    return std::string(h ? h : ".") + "/cyclomp_" + name;
 #endif
 }
 
@@ -425,6 +442,7 @@ int main(int, char **)
         w.set_detail_tab(0);
         w.set_replay_playing(false);
         w.set_replay_progress(0.f);
+        w.set_export_status(slint::SharedString(""));
         // Defer the screen switch. This callback runs inside the history
         // ListView's own pointer-event dispatch; switching screen here would
         // destroy screen 2 (the ListView) synchronously, and Slint then walks
@@ -651,6 +669,31 @@ int main(int, char **)
             mapgl::set_bearing(0); // back to flat north-up
         }
 #endif
+    });
+
+    // Export the selected ride to a GeoJSON file (feeds the Three.js viewer).
+    ui->on_export_ride([ui = slint::ComponentWeakHandle(ui), log] {
+        auto u = ui.lock();
+        if (!u) return;
+        auto &w = **u;
+        int i = w.get_selected_session();
+        const auto &rows = log->newest_first();
+        if (i < 0 || (size_t)i >= rows.size()) return;
+        std::string name;
+        std::string path = export_path(rows[i].ended_at, &name);
+        std::string js = core::session_to_geojson(rows[i]);
+        std::FILE *f = std::fopen(path.c_str(), "w");
+        if (f && std::fwrite(js.data(), 1, js.size(), f) == js.size()) {
+            std::fclose(f);
+            w.set_export_status(slint::SharedString("SAVED " + name));
+#if defined(__ANDROID__)
+            __android_log_print(ANDROID_LOG_INFO, "cyclomp-export",
+                                "wrote %s (%zu bytes)", path.c_str(), js.size());
+#endif
+        } else {
+            if (f) std::fclose(f);
+            w.set_export_status(slint::SharedString("EXPORT FAILED"));
+        }
     });
 
     // Leave the detail page: stop the replay, hand the marker back to the

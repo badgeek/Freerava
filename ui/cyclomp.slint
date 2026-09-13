@@ -394,6 +394,8 @@ export component AppWindow inherits Window {
     in property <float> ep-start-ny;
     in property <float> ep-end-nx;
     in property <float> ep-end-ny;
+    in property <string> export-status;           // transient EXPORT feedback
+    callback export-ride();                        // write this ride to GeoJSON
     callback detail-back();
     callback detail-map-shown();  // MAP tab opened: fit camera to the track
     callback replay-toggle();
@@ -1158,6 +1160,32 @@ export component AppWindow inherits Window {
                         font-size: 11px;
                         font-weight: 700;
                         vertical-alignment: center;
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    Text {
+                        text: root.export-status;
+                        color: Palette.dim;
+                        font-size: 10px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+                    Rectangle {
+                        width: 88px;
+                        y: 4px;
+                        height: 24px;
+                        background: xa.pressed ? Palette.phos : transparent;
+                        border-width: 1px;
+                        border-color: Palette.phos;
+                        xa := TouchArea { clicked => { root.export-ride(); } }
+                        Text {
+                            text: "EXPORT";
+                            color: xa.pressed ? Palette.ink : Palette.phos;
+                            font-size: 11px;
+                            font-weight: 900;
+                            letter-spacing: 1px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
                     }
                 }
             }
