@@ -164,6 +164,44 @@ int main(int, char **)
     }
 #endif
 
+    // Where the rider currently is — for the map marker and the LOCATE
+    // button. False before the first fix; the mock always knows.
+    std::function<bool(double &, double &)> current_position =
+        [](double &, double &) { return false; };
+    if (mock) {
+        current_position = [mock](double &la, double &lo) {
+            la = mock->lat();
+            lo = mock->lon();
+            return true;
+        };
+    }
+#ifdef __ANDROID__
+    if (gps_source) {
+        current_position = [gps_source](double &la, double &lo) {
+            return gps_source->last_position(la, lo);
+        };
+    }
+#endif
+
+    // Hand the rider's position to the map and read back where the map
+    // thread projected it. Desktop keeps the built-in centre defaults.
+    std::function<void(AppWindow &)> publish_marker = [](AppWindow &) {};
+#if defined(CYCLOMP_MAP_GL)
+    publish_marker = [current_position](AppWindow &w) {
+        double la, lo;
+        if (current_position(la, lo)) mapgl::set_marker(la, lo);
+        double nx, ny, aspect;
+        if (mapgl::marker_offset(nx, ny, aspect)) {
+            w.set_marker_nx((float)nx);
+            w.set_marker_ny((float)ny);
+            w.set_frame_aspect((float)aspect);
+            w.set_marker_valid(true);
+        } else {
+            w.set_marker_valid(false);
+        }
+    };
+#endif
+
     auto engine = std::make_shared<core::RideEngine>();
     auto log = std::make_shared<core::SessionLog>();
 
@@ -188,9 +226,10 @@ int main(int, char **)
     // B-lite: mbgl renders headless (own context) and GPU-blits into shared
     // AHardwareBuffers; the UI shows them as borrowed-GL-texture Images.
     // Frames arrive on the map thread — hop to the UI thread first.
-    mapgl::set_frame_sink([ui = slint::ComponentWeakHandle(ui)](
-                              uint32_t idx, uint32_t w, uint32_t h) {
-        slint::invoke_from_event_loop([ui, idx, w, h] {
+    mapgl::set_frame_sink([ui = slint::ComponentWeakHandle(ui),
+                           publish_marker](uint32_t idx, uint32_t w,
+                                           uint32_t h) {
+        slint::invoke_from_event_loop([ui, idx, w, h, publish_marker] {
             auto u = ui.lock();
             if (!u) return;
             uint32_t tex = mapgl::ui_texture(idx);
@@ -205,6 +244,8 @@ int main(int, char **)
             (*u)->set_map_frame(slint::Image::create_from_borrowed_gl_2d_rgba_texture(
                 tex, slint::Size<uint32_t>{w, h},
                 slint::Image::BorrowedOpenGLTextureOrigin::BottomLeft));
+            // The projection belongs to the frame we just published.
+            publish_marker(**u);
         });
     });
     {
@@ -255,6 +296,21 @@ int main(int, char **)
     if (mock) {
         if (auto up = camera->on_position(mock->lat(), mock->lon())) cam_sink(*up);
     }
+    publish_marker(*ui);
+
+    // LOCATE: fly back to the rider and relock the camera. Nothing to do
+    // before the first fix.
+    ui->on_map_locate([ui = slint::ComponentWeakHandle(ui), camera, cam_sink,
+                       current_position, publish_marker] {
+        auto u = ui.lock();
+        if (!u) return;
+        double la, lo;
+        if (!current_position(la, lo)) return;
+        camera->relock();
+        if (auto up = camera->on_position(la, lo)) cam_sink(*up);
+        (*u)->set_map_following(camera->following());
+        publish_marker(**u);
+    });
 
     ui->on_map_zoom([=](int delta) {
 #if defined(CYCLOMP_MAP_GL)
@@ -268,19 +324,23 @@ int main(int, char **)
 #endif
     });
 #if defined(CYCLOMP_MAP_GL)
-    ui->on_map_pan([camera](float dx, float dy) {
+    ui->on_map_pan([ui = slint::ComponentWeakHandle(ui), camera](float dx,
+                                                                 float dy) {
         camera->release();
         mapgl::drag_by(dx, dy);
+        if (auto u = ui.lock()) (*u)->set_map_following(false);
     });
     {
         // Slint reports a cumulative pinch scale; mbgl wants increments.
         auto last = std::make_shared<double>(1.0);
         ui->on_map_pinch_begin([last] { *last = 1.0; });
-        ui->on_map_pinch([camera, last](float s, float cx, float cy) {
+        ui->on_map_pinch([ui = slint::ComponentWeakHandle(ui), camera, last](
+                             float s, float cx, float cy) {
             if (s <= 0 || *last <= 0) return;
             camera->release();
             mapgl::scale_by(s / *last, cx, cy);
             *last = s;
+            if (auto u = ui.lock()) (*u)->set_map_following(false);
         });
     }
 #endif
@@ -304,6 +364,7 @@ int main(int, char **)
                 publish_idle(w, sensors);
                 publish_nav(w);
                 camera->relock(); // camera back onto the rider
+                w.set_map_following(true);
             }
             w.set_ride_state((int)engine->toggle());
         });
@@ -330,12 +391,14 @@ int main(int, char **)
     static slint::Timer timer;
     timer.start(slint::TimerMode::Repeated, std::chrono::milliseconds(500),
         [ui = slint::ComponentWeakHandle(ui), source, engine, camera, cam_sink,
-         sensors, publish_nav] {
+         sensors, publish_nav, publish_marker] {
             auto u = ui.lock();
             if (!u) return;
             auto &w = **u;
-            // Keeps the GPS status strip live even before the ride starts.
+            // Keeps the GPS status strip and the map marker live even before
+            // the ride starts.
             publish_nav(w);
+            publish_marker(w);
             if (engine->state() != core::RideState::Running) return;
             auto s = source->sample(0.5);
             engine->tick(0.5, s);

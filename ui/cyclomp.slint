@@ -181,10 +181,21 @@ export component AppWindow inherits Window {
     // ---- Map (rendered off-screen by MapLibre; C++ pushes RGBA frames) ----
     in property <image> map-frame;
     in property <bool> map-available: false;
+    // Rider marker, projected by C++ onto the rendered frame: offsets from
+    // the frame centre as a fraction of its width/height. The frame's own
+    // aspect ratio is needed to undo `image-fit: cover`. Defaults put the
+    // marker dead centre, which is where the desktop path keeps the rider.
+    in property <float> marker-nx: 0;
+    in property <float> marker-ny: 0;
+    in property <float> frame-aspect: 0.6667;
+    in property <bool> marker-valid: true;
+    // Camera locked onto the rider (released by pan/pinch, retaken by LOCATE).
+    in property <bool> map-following: true;
 
     callback toggle-ride();  // idle->start, running->pause, paused->resume
     callback stop-ride();    // finalize + save session
     callback map-zoom(int);  // +1 / -1 zoom step
+    callback map-locate();   // recentre on the rider and relock the camera
     callback map-pan(float, float);          // one-finger drag delta (px)
     callback map-pinch-begin();
     callback map-pinch(float, float, float); // cumulative scale, center x, y
@@ -394,15 +405,44 @@ export component AppWindow inherits Window {
                 }
             }
 
-            // Rider position marker: map camera is centered on the rider.
-            if root.map-available : Rectangle {
-                width: 18px;
-                height: 18px;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                background: Palette.red;
-                border-width: 3px;
-                border-color: Palette.paper;
+            // Rider position marker. The frame is drawn with `image-fit:
+            // cover`, so it is scaled by whichever axis has to fill: the
+            // same factor is applied to the projected offset here.
+            if root.map-available && root.marker-valid : Rectangle {
+                width: 38px;
+                height: 38px;
+                x: (parent.width - self.width) / 2 + root.marker-nx *
+                   max(parent.width, parent.height * root.frame-aspect);
+                y: (parent.height - self.height) / 2 + root.marker-ny *
+                   max(parent.width / root.frame-aspect, parent.height);
+
+                // Soft halo, so the marker survives a busy map.
+                Rectangle {
+                    width: 100%;
+                    height: 100%;
+                    border-radius: self.width / 2;
+                    background: #f4f1e947;
+                }
+                // Bone-white disc: the contrast ring against the tiles.
+                Rectangle {
+                    width: 26px;
+                    height: 26px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: self.width / 2;
+                    background: Palette.paper;
+                    border-width: 2px;
+                    border-color: Palette.ink;
+                }
+                // Bauhaus square inside the circle — red while the ride is
+                // live, ink when it is idle or paused.
+                Rectangle {
+                    width: 12px;
+                    height: 12px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    background: root.ride-state == 1 ? Palette.red : Palette.ink;
+                }
             }
 
             // Live ride chip while riding.
@@ -434,13 +474,63 @@ export component AppWindow inherits Window {
                 }
             }
 
-            // Zoom controls.
+            // Map controls: locate, then zoom.
             if root.map-available : VerticalLayout {
                 x: parent.width - 56px;
-                y: parent.height - 116px;
+                y: parent.height - 172px;
                 width: 48px;
-                height: 100px;
+                height: 156px;
                 spacing: 4px;
+                // LOCATE: recentre on the rider and relock the camera. Turns
+                // yellow while the camera is following.
+                Rectangle {
+                    background: Palette.ink;
+                    TouchArea { clicked => { root.map-locate(); } }
+                    property <color> tint: root.map-following ? Palette.yellow
+                                                              : Palette.paper;
+                    // Crosshair: ring, centre dot, four ticks.
+                    Rectangle {
+                        width: 20px;
+                        height: 20px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: self.width / 2;
+                        border-width: 2px;
+                        border-color: parent.tint;
+                    }
+                    Rectangle {
+                        width: 6px;
+                        height: 6px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: 3px;
+                        background: parent.tint;
+                    }
+                    Rectangle {
+                        width: 2px; height: 6px;
+                        x: (parent.width - self.width) / 2;
+                        y: parent.height / 2 - 15px;
+                        background: parent.tint;
+                    }
+                    Rectangle {
+                        width: 2px; height: 6px;
+                        x: (parent.width - self.width) / 2;
+                        y: parent.height / 2 + 9px;
+                        background: parent.tint;
+                    }
+                    Rectangle {
+                        width: 6px; height: 2px;
+                        x: parent.width / 2 - 15px;
+                        y: (parent.height - self.height) / 2;
+                        background: parent.tint;
+                    }
+                    Rectangle {
+                        width: 6px; height: 2px;
+                        x: parent.width / 2 + 9px;
+                        y: (parent.height - self.height) / 2;
+                        background: parent.tint;
+                    }
+                }
                 Rectangle {
                     background: Palette.ink;
                     TouchArea { clicked => { root.map-zoom(1); } }

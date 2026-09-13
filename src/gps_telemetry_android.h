@@ -36,6 +36,10 @@ public:
     };
     Status status() const;
 
+    // Last accepted fix, even if it has since gone stale — the LOCATE button
+    // still has somewhere to fly to. False until the first fix.
+    bool last_position(double &lat, double &lon) const;
+
 private:
     // JNIEnv for the calling thread, attaching it if needed.
     JNIEnv *env();

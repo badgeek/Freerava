@@ -292,6 +292,13 @@ core::Sample AndroidTelemetrySource::sample(double) {
     return s;
 }
 
+bool AndroidTelemetrySource::last_position(double &lat, double &lon) const {
+    if (!have_prev_) return false;
+    lat = lat_;
+    lon = lon_;
+    return true;
+}
+
 AndroidTelemetrySource::Status AndroidTelemetrySource::status() const {
     char buf[32];
     switch (state_) {

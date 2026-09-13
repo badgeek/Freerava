@@ -30,6 +30,16 @@ uint32_t ui_texture(uint32_t idx);
 // zoom level (used by follow-mode so pinch zoom isn't overridden).
 void set_camera(double lat, double lon, double zoom);
 
+// Where the rider is. mbgl's Map belongs to the map thread, so the
+// lat/lon -> screen projection happens there, right after each render.
+void set_marker(double lat, double lon);
+
+// Latest projection of the marker: offsets from the frame centre as a
+// FRACTION of the frame's width/height, plus the frame's aspect ratio (the
+// UI needs it to undo `image-fit: cover`). False until a marker has been
+// set and a frame carrying it has rendered.
+bool marker_offset(double &nx, double &ny, double &aspect);
+
 // One-finger pan: shift the map by a screen delta (logical px).
 void drag_by(double dx, double dy);
 

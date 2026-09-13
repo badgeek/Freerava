@@ -71,6 +71,12 @@ struct Service {
     double scale = 1.0;            // accumulated pinch factor
     double ax = 0, ay = 0;         // pinch anchor (logical px)
 
+    // Rider marker: set from the UI thread, projected on the map thread.
+    double markerLat = 0, markerLon = 0;
+    bool markerSet = false;
+    std::atomic<bool> markerProjected{false};
+    std::atomic<double> markerNx{0}, markerNy{0}, markerAspect{1};
+
     AHardwareBuffer *ahb[kBufs] = {nullptr, nullptr, nullptr};
     EGLImageKHR image[kBufs] = {EGL_NO_IMAGE_KHR, EGL_NO_IMAGE_KHR,
                                 EGL_NO_IMAGE_KHR};
@@ -178,8 +184,8 @@ void threadMain() {
     int cur = 0;
 
     for (;;) {
-        bool ctr;
-        double la, lo, zm, dx, dy, sc, ax, ay;
+        bool ctr, mset;
+        double la, lo, zm, dx, dy, sc, ax, ay, mlat, mlon;
         {
             std::unique_lock<std::mutex> lk(s.m);
             s.cv.wait(lk, [&] {
@@ -199,6 +205,9 @@ void threadMain() {
             ax = s.ax;
             ay = s.ay;
             s.scale = 1.0;
+            mset = s.markerSet;
+            mlat = s.markerLat;
+            mlon = s.markerLon;
         }
         if (ctr) {
             auto cam = mln::CameraOptions().withCenter(mln::LatLng{la, lo});
@@ -249,6 +258,16 @@ void threadMain() {
                                 (GLsizei)physSize.height);
             glFinish(); // buffer must be complete before the UI samples it
         }
+        // Project the rider onto the frame we just rendered. Normalised so
+        // the UI can place it without knowing the texture size.
+        if (mset) {
+            auto p = map.pixelForLatLng(mln::LatLng{mlat, mlon});
+            s.markerNx.store((p.x - lw / 2.0) / lw);
+            s.markerNy.store((p.y - lh / 2.0) / lh);
+            s.markerAspect.store((double)lw / (double)lh);
+            s.markerProjected.store(true);
+        }
+
         int idx = cur;
         cur = (cur + 1) % kBufs;
         if (s.sink) s.sink((uint32_t)idx, physSize.width, physSize.height);
@@ -303,6 +322,31 @@ void set_camera(double lat, double lon, double zoom) {
         s.centerDirty = true;
     }
     s.cv.notify_one();
+}
+
+void set_marker(double lat, double lon) {
+    auto &s = svc();
+    bool moved = false;
+    {
+        std::lock_guard<std::mutex> lk(s.m);
+        if (!s.markerSet || s.markerLat != lat || s.markerLon != lon) {
+            s.markerLat = lat;
+            s.markerLon = lon;
+            s.markerSet = true;
+            s.renderDirty = true; // re-render so the projection follows
+            moved = true;
+        }
+    }
+    if (moved) s.cv.notify_one();
+}
+
+bool marker_offset(double &nx, double &ny, double &aspect) {
+    auto &s = svc();
+    if (!s.markerProjected.load()) return false;
+    nx = s.markerNx.load();
+    ny = s.markerNy.load();
+    aspect = s.markerAspect.load();
+    return true;
 }
 
 void drag_by(double dx, double dy) {
