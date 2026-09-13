@@ -198,7 +198,15 @@ export component AppWindow inherits Window {
     callback map-locate();   // recentre on the rider and relock the camera
     callback map-pan(float, float);          // one-finger drag delta (px)
     callback map-pinch-begin();
-    callback map-pinch(float, float, float); // cumulative scale, center x, y
+    // Fired once when the pinch ends: total scale + the locked anchor (px).
+    callback map-pinch-commit(float, float, float);
+
+    // Live pinch preview: the already-rendered frame is scaled visually
+    // around the locked anchor (pure GPU, 60fps); mbgl renders once on
+    // commit and C++ resets the preview when that sharp frame arrives.
+    in-out property <float> map-preview-scale: 1.0;
+    in-out property <length> map-pinch-ax: 0px;
+    in-out property <length> map-pinch-ay: 0px;
 
     property <color> hr-color: root.hr-zone >= 4 ? Palette.red
                              : root.hr-zone == 3 ? Palette.yellow
@@ -337,22 +345,44 @@ export component AppWindow inherits Window {
         if root.screen == 1 : Rectangle {
             vertical-stretch: 1;
             background: Palette.ink;
+            clip: true; // the pinch preview scales the frame past the edges
 
             if root.map-available : Image {
-                width: 100%;
-                height: 100%;
+                // Scale around the pinch anchor: x' = A*(1-s).
+                x: root.map-pinch-ax * (1 - root.map-preview-scale);
+                y: root.map-pinch-ay * (1 - root.map-preview-scale);
+                width: parent.width * root.map-preview-scale;
+                height: parent.height * root.map-preview-scale;
                 source: root.map-frame;
                 image-fit: cover;
             }
 
             // Gestures: one-finger pan, two-finger pinch zoom, double-tap
             // zoom-in. The zoom buttons are declared later, so they stay on
-            // top and remain clickable.
-            if root.map-available : ScaleRotateGestureHandler {
-                started => { root.map-pinch-begin(); }
+            // top and remain clickable. During the pinch only the visual
+            // preview moves; mbgl renders once on commit.
+            if root.map-available : gest := ScaleRotateGestureHandler {
+                property <float> last-scale: 1.0;
+                started => {
+                    root.map-pinch-ax = self.center.x;
+                    root.map-pinch-ay = self.center.y;
+                    root.map-preview-scale = 1.0;
+                    self.last-scale = 1.0;
+                    root.map-pinch-begin();
+                }
                 updated => {
-                    root.map-pinch(self.scale,
-                                   self.center.x / 1px, self.center.y / 1px);
+                    self.last-scale = self.scale;
+                    root.map-preview-scale = self.scale;
+                }
+                ended => {
+                    root.map-pinch-commit(self.last-scale,
+                                          root.map-pinch-ax / 1px,
+                                          root.map-pinch-ay / 1px);
+                }
+                cancelled => {
+                    root.map-pinch-commit(self.last-scale,
+                                          root.map-pinch-ax / 1px,
+                                          root.map-pinch-ay / 1px);
                 }
                 TouchArea {
                     property <length> last-x;
@@ -364,8 +394,11 @@ export component AppWindow inherits Window {
                         }
                     }
                     moved => {
-                        root.map-pan((self.mouse-x - last-x) / 1px,
-                                     (self.mouse-y - last-y) / 1px);
+                        // Suppress the one-finger pan while pinching.
+                        if (!gest.active) {
+                            root.map-pan((self.mouse-x - last-x) / 1px,
+                                         (self.mouse-y - last-y) / 1px);
+                        }
                         last-x = self.mouse-x;
                         last-y = self.mouse-y;
                     }

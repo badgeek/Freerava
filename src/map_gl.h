@@ -16,8 +16,10 @@ void setup(uint32_t width_px, uint32_t height_px, float pixel_ratio);
 
 // Called from the MAP THREAD when a frame is finished (buffer fully blitted).
 // idx selects the AHardwareBuffer; hop to the UI thread before touching Slint.
+// `gen` is the camera-command generation the frame includes (compare against
+// the value returned by scale_by to know when a pinch commit has landed).
 void set_frame_sink(std::function<void(uint32_t idx, uint32_t width,
-                                       uint32_t height)> sink);
+                                       uint32_t height, uint64_t gen)> sink);
 
 // Import the shared buffers into the current GL context. Call ONLY from the
 // rendering notifier (Slint's GL context current). Returns true once done.
@@ -44,7 +46,9 @@ bool marker_offset(double &nx, double &ny, double &aspect);
 void drag_by(double dx, double dy);
 
 // Pinch: multiply the scale by `factor` around `anchor` (logical px).
-void scale_by(double factor, double ax, double ay);
+// Returns the command generation; frames whose sink `gen` >= this value
+// include the scale.
+uint64_t scale_by(double factor, double ax, double ay);
 
 // +/- buttons: one zoom level in/out around the map centre.
 void zoom_step(int delta);

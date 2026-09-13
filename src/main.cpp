@@ -23,6 +23,7 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -226,10 +227,17 @@ int main(int, char **)
     // B-lite: mbgl renders headless (own context) and GPU-blits into shared
     // AHardwareBuffers; the UI shows them as borrowed-GL-texture Images.
     // Frames arrive on the map thread — hop to the UI thread first.
+    // Pinch preview: the UI scales the last frame visually during the
+    // gesture; on commit mbgl renders once, and the preview is reset only
+    // when a frame carrying that command generation arrives (avoids the
+    // one-frame "snap back to the old zoom" glitch).
+    auto pinch_commit_gen = std::make_shared<std::atomic<uint64_t>>(0);
     mapgl::set_frame_sink([ui = slint::ComponentWeakHandle(ui),
-                           publish_marker](uint32_t idx, uint32_t w,
-                                           uint32_t h) {
-        slint::invoke_from_event_loop([ui, idx, w, h, publish_marker] {
+                           publish_marker, pinch_commit_gen](
+                              uint32_t idx, uint32_t w, uint32_t h,
+                              uint64_t gen) {
+        slint::invoke_from_event_loop([ui, idx, w, h, gen, publish_marker,
+                                       pinch_commit_gen] {
             auto u = ui.lock();
             if (!u) return;
             uint32_t tex = mapgl::ui_texture(idx);
@@ -244,6 +252,11 @@ int main(int, char **)
             (*u)->set_map_frame(slint::Image::create_from_borrowed_gl_2d_rgba_texture(
                 tex, slint::Size<uint32_t>{w, h},
                 slint::Image::BorrowedOpenGLTextureOrigin::BottomLeft));
+            uint64_t want = pinch_commit_gen->load();
+            if (want != 0 && gen >= want) {
+                (*u)->set_map_preview_scale(1.f);
+                pinch_commit_gen->store(0);
+            }
             // The projection belongs to the frame we just published.
             publish_marker(**u);
         });
@@ -330,19 +343,21 @@ int main(int, char **)
         mapgl::drag_by(dx, dy);
         if (auto u = ui.lock()) (*u)->set_map_following(false);
     });
-    {
-        // Slint reports a cumulative pinch scale; mbgl wants increments.
-        auto last = std::make_shared<double>(1.0);
-        ui->on_map_pinch_begin([last] { *last = 1.0; });
-        ui->on_map_pinch([ui = slint::ComponentWeakHandle(ui), camera, last](
-                             float s, float cx, float cy) {
-            if (s <= 0 || *last <= 0) return;
-            camera->release();
-            mapgl::scale_by(s / *last, cx, cy);
-            *last = s;
-            if (auto u = ui.lock()) (*u)->set_map_following(false);
-        });
-    }
+    // During the pinch only the Slint-side preview moves (60fps); mbgl gets
+    // ONE scale_by on commit. renderStill blocks until every tile of the new
+    // zoom level is ready, which made per-update commits stutter.
+    ui->on_map_pinch_begin([ui = slint::ComponentWeakHandle(ui), camera] {
+        camera->release();
+        if (auto u = ui.lock()) (*u)->set_map_following(false);
+    });
+    ui->on_map_pinch_commit([ui = slint::ComponentWeakHandle(ui),
+                             pinch_commit_gen](float s, float cx, float cy) {
+        if (s <= 0) return;
+        pinch_commit_gen->store(mapgl::scale_by(s, cx, cy));
+        // The preview stays applied until the sharp frame lands (see the
+        // frame sink); nothing else to do here.
+        (void)ui;
+    });
 #endif
 
     // idle -> start (fresh session) | running -> pause | paused -> resume.

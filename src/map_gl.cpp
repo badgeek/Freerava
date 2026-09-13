@@ -59,11 +59,12 @@ struct Service {
     uint32_t widthPx = 0, heightPx = 0; // physical buffer size
     float ratio = 1.f;
 
-    std::function<void(uint32_t, uint32_t, uint32_t)> sink;
+    std::function<void(uint32_t, uint32_t, uint32_t, uint64_t)> sink;
 
     std::mutex m;
     std::condition_variable cv;
     // pending camera commands (coalesced; applied on the map thread)
+    uint64_t cmdGen = 0; // bumped per accepted command; frames report theirs
     double lat = -6.9147, lon = 107.6098, zoom = 15; // Bandung
     bool centerDirty = true;
     bool renderDirty = false;      // re-render without camera change (poke)
@@ -186,12 +187,14 @@ void threadMain() {
     for (;;) {
         bool ctr, mset;
         double la, lo, zm, dx, dy, sc, ax, ay, mlat, mlon;
+        uint64_t gen;
         {
             std::unique_lock<std::mutex> lk(s.m);
             s.cv.wait(lk, [&] {
                 return s.centerDirty || s.renderDirty || s.dx != 0 ||
                        s.dy != 0 || s.scale != 1.0;
             });
+            gen = s.cmdGen;
             ctr = s.centerDirty;
             s.centerDirty = false;
             s.renderDirty = false;
@@ -270,7 +273,7 @@ void threadMain() {
 
         int idx = cur;
         cur = (cur + 1) % kBufs;
-        if (s.sink) s.sink((uint32_t)idx, physSize.width, physSize.height);
+        if (s.sink) s.sink((uint32_t)idx, physSize.width, physSize.height, gen);
     }
 }
 
@@ -285,7 +288,8 @@ void setup(uint32_t width_px, uint32_t height_px, float pixel_ratio) {
     std::thread(threadMain).detach();
 }
 
-void set_frame_sink(std::function<void(uint32_t, uint32_t, uint32_t)> sink) {
+void set_frame_sink(
+    std::function<void(uint32_t, uint32_t, uint32_t, uint64_t)> sink) {
     svc().sink = std::move(sink);
 }
 
@@ -320,6 +324,7 @@ void set_camera(double lat, double lon, double zoom) {
         s.lon = lon;
         s.zoom = zoom;
         s.centerDirty = true;
+        ++s.cmdGen;
     }
     s.cv.notify_one();
 }
@@ -355,20 +360,26 @@ void drag_by(double dx, double dy) {
         std::lock_guard<std::mutex> lk(s.m);
         s.dx += dx;
         s.dy += dy;
+        ++s.cmdGen;
     }
     s.cv.notify_one();
 }
 
-void scale_by(double factor, double ax, double ay) {
-    if (factor <= 0) return;
+uint64_t scale_by(double factor, double ax, double ay) {
     auto &s = svc();
+    uint64_t gen;
     {
         std::lock_guard<std::mutex> lk(s.m);
-        s.scale *= factor;
-        s.ax = ax;
-        s.ay = ay;
+        if (factor > 0) {
+            s.scale *= factor;
+            s.ax = ax;
+            s.ay = ay;
+            ++s.cmdGen;
+        }
+        gen = s.cmdGen;
     }
     s.cv.notify_one();
+    return gen;
 }
 
 void zoom_step(int delta) {
