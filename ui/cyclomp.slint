@@ -133,18 +133,21 @@ component MetricCell inherits Rectangle {
 
 // Console header: ship line + screen title + blinking cursor on the left,
 // two status lines (GPS / nav) on the right. Replaces the old amber strip.
+// Console header, segmented into framed module boxes so each screen reads
+// like a system mode panel: ship line, title module, then status modules
+// with square indicator lamps.
 component ConsoleHeader inherits Rectangle {
     in property <string> title;
-    in property <string> status;    // amber, status line left segment
-    in property <string> status2;   // dim, status line right segment
-    height: 78px;
+    in property <string> status;    // amber module (GPS / count)
+    in property <string> status2;   // dim module (detail line)
+    height: 104px;
     background: Palette.ink;
     VerticalLayout {
         VerticalLayout {
-            padding-left: 14px;
+            padding-left: 12px;
             padding-right: 64px; // clear of the sticky gear button
-            padding-top: 8px;
-            spacing: 3px;
+            padding-top: 6px;
+            spacing: 5px;
             Text {
                 text: "WEYLAND-YUTANI CORP // ROUTE SYSTEMS";
                 color: Palette.dim;
@@ -152,29 +155,88 @@ component ConsoleHeader inherits Rectangle {
                 font-weight: 700;
                 letter-spacing: 2px;
             }
-            Text {
-                text: root.title;
-                color: Palette.phos;
-                font-size: 22px;
-                font-weight: 900;
-                letter-spacing: 3px;
-            }
-            HorizontalLayout {
-                alignment: start;
-                spacing: 10px;
-                Text {
-                    text: root.status;
-                    color: Palette.amber;
-                    font-size: 11px;
-                    font-weight: 900;
-                    letter-spacing: 1px;
+            // Title module.
+            Rectangle {
+                height: 38px;
+                background: Palette.panel;
+                border-width: 1px;
+                border-color: Palette.line;
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    spacing: 8px;
+                    alignment: start;
+                    Rectangle {
+                        width: 8px;
+                        height: 8px;
+                        y: (parent.height - self.height) / 2;
+                        background: Palette.phos;
+                    }
+                    Text {
+                        text: root.title;
+                        color: Palette.phos;
+                        font-size: 20px;
+                        font-weight: 900;
+                        letter-spacing: 3px;
+                        vertical-alignment: center;
+                    }
                 }
-                Text {
-                    text: root.status2;
-                    color: Palette.dim;
-                    font-size: 11px;
-                    font-weight: 700;
-                    letter-spacing: 1px;
+            }
+            // Status modules.
+            HorizontalLayout {
+                height: 26px;
+                spacing: 6px;
+                Rectangle {
+                    width: st.preferred-width + 26px;
+                    background: Palette.panel;
+                    border-width: 1px;
+                    border-color: Palette.line;
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        spacing: 6px;
+                        alignment: start;
+                        Rectangle {
+                            width: 6px;
+                            height: 6px;
+                            y: (parent.height - self.height) / 2;
+                            background: Palette.amber;
+                        }
+                        st := Text {
+                            text: root.status;
+                            color: Palette.amber;
+                            font-size: 11px;
+                            font-weight: 900;
+                            letter-spacing: 1px;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: Palette.panel;
+                    border-width: 1px;
+                    border-color: Palette.line;
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        spacing: 6px;
+                        alignment: start;
+                        Rectangle {
+                            width: 6px;
+                            height: 6px;
+                            y: (parent.height - self.height) / 2;
+                            background: Palette.dim;
+                        }
+                        Text {
+                            text: root.status2;
+                            color: Palette.dim;
+                            font-size: 11px;
+                            font-weight: 700;
+                            letter-spacing: 1px;
+                            vertical-alignment: center;
+                        }
+                    }
                 }
             }
         }
