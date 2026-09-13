@@ -661,7 +661,7 @@ int main(int, char **)
     timer.start(slint::TimerMode::Repeated, std::chrono::milliseconds(500),
         [ui = slint::ComponentWeakHandle(ui), source, engine, camera, cam_sink,
          sensors, publish_nav, publish_marker, recorder, heading_up,
-         last_course, last_sent_bearing, replay_active] {
+         last_course, last_sent_bearing, replay_active, current_position] {
             auto u = ui.lock();
             if (!u) return;
             auto &w = **u;
@@ -669,6 +669,14 @@ int main(int, char **)
             // the ride starts.
             publish_nav(w);
             publish_marker(w);
+            // With real GPS the startup camera push is skipped (nowhere to
+            // point yet): place the camera on the very first fix, even while
+            // idle — no LOCATE press needed after launch.
+            if (!camera->placed()) {
+                double la, lo;
+                if (current_position(la, lo))
+                    if (auto up = camera->on_position(la, lo)) cam_sink(*up);
+            }
 #if defined(CYCLOMP_MAP_GL) && defined(__ANDROID__)
             // Heading-up: compass while slow or stopped, GPS course once
             // moving briskly. Runs even outside a ride; paused during

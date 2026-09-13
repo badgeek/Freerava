@@ -6,10 +6,12 @@ using namespace core;
 
 TEST_CASE("first position always fires with the initial zoom") {
     FollowCamera cam(15.0);
+    CHECK_FALSE(cam.placed());
     cam.release(); // even released, the first fix must place the camera
     auto up = cam.on_position(-6.9, 107.6);
     REQUIRE(up.has_value());
     CHECK(up->zoom == doctest::Approx(15.0));
+    CHECK(cam.placed());
 }
 
 TEST_CASE("subsequent updates keep the current zoom") {
