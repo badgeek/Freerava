@@ -204,6 +204,12 @@ const app = document.getElementById('app');
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 app.appendChild(renderer.domElement);
+// Safety net: MapLibre adds a second WebGL context, and a stressed browser
+// can drop ours. Ask for it back rather than going blank.
+renderer.domElement.addEventListener('webglcontextlost', e => {
+  e.preventDefault();
+  setTimeout(() => renderer.forceContextRestore(), 200);
+}, false);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(COL.bg);
@@ -546,11 +552,87 @@ const loadImg = url => new Promise((res, rej) => {
   im.src = url;
 });
 
-// -- Basemap: stitch OSM standard raster tiles (free, no API key) onto a 2D
-// canvas and crop to the exact bbox. Deliberately NOT MapLibre GL: a second
-// WebGL context on the page made the browser drop the Three.js one ("WebGL
-// context was lost" -> shader validation failures -> blank viewer). A 2D
-// canvas needs no GL context, and OSM's road colours read well on the slab.
+// -- Basemap: MapLibre GL JS renders the bbox (OpenFreeMap "liberty" vector
+// style, free/no key) into a hidden map; we copy its canvas out as the slab
+// texture. Vector = crisp at any zoom and exact mercator, which fixes both
+// the blurry-on-zoom look and the base/detail registration ghosting.
+//
+// The earlier context-loss ("WebGL context was lost" -> blank viewer) came
+// from keeping a LIVE interactive MapLibre map around (a second, persistent
+// GL context fighting Three's). Here there is exactly ONE hidden map, created
+// once and REUSED for every render (never per-call churn), and renders are
+// serialised through a queue. Two stable contexts coexist fine; if MapLibre
+// still fails (offline/blocked) we fall back to the OSM raster stitch below.
+let _mlPromise = null;
+function loadMapLibre() {
+  if (window.maplibregl) return Promise.resolve();
+  if (!_mlPromise) _mlPromise = new Promise((res, rej) => {
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css';
+    document.head.appendChild(css);
+    const s = document.createElement('script');
+    s.src = 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js';
+    s.onload = () => res(); s.onerror = () => rej(new Error('maplibre load failed'));
+    document.head.appendChild(s);
+  });
+  return _mlPromise;
+}
+
+let _mlMap = null, _mlDiv = null, _mlQueue = Promise.resolve();
+async function mlReady() {
+  await loadMapLibre();
+  if (_mlMap) return _mlMap;
+  _mlDiv = document.createElement('div');
+  _mlDiv.style.cssText = 'position:fixed;left:-20000px;top:0;width:1024px;height:1024px;';
+  document.body.appendChild(_mlDiv);
+  _mlMap = new maplibregl.Map({
+    container: _mlDiv,
+    style: 'https://tiles.openfreemap.org/styles/liberty',
+    interactive: false, attributionControl: false,
+    preserveDrawingBuffer: true, fadeDuration: 0, antialias: true,
+  });
+  await new Promise((res, rej) => {
+    const to = setTimeout(() => rej(new Error('maplibre init timeout')), 20000);
+    _mlMap.once('load', () => { clearTimeout(to); res(); });
+  });
+  return _mlMap;
+}
+
+// Render a bbox flat (pitch 0) into a canvas ~maxPx on its long side, matched
+// to the bbox's mercator aspect so it drapes edge-to-edge. Sets _mpp (metres
+// per pixel) for LOD gating. Serialised — one render at a time on the shared map.
+function mlRender(lonW, latS, lonE, latN, maxPx = 2048) {
+  const run = async () => {
+    const map = await mlReady();
+    const mAspect = (mercX(lonE) - mercX(lonW)) / (mercY(latS) - mercY(latN));
+    const cssW = mAspect >= 1 ? maxPx : Math.max(256, Math.round(maxPx * mAspect));
+    const cssH = mAspect >= 1 ? Math.max(256, Math.round(maxPx / mAspect)) : maxPx;
+    _mlDiv.style.width = cssW + 'px'; _mlDiv.style.height = cssH + 'px';
+    map.resize();
+    map.fitBounds([[lonW, latS], [lonE, latN]], { padding: 0, animate: false, duration: 0 });
+    await new Promise((res, rej) => {
+      const to = setTimeout(() => rej(new Error('maplibre render timeout')), 15000);
+      map.once('idle', () => { clearTimeout(to); res(); });
+    });
+    const src = map.getCanvas();
+    const out = document.createElement('canvas');
+    out.width = src.width; out.height = src.height;
+    const ctx = out.getContext('2d');
+    ctx.filter = 'saturate(1.06) contrast(1.03)';
+    ctx.drawImage(src, 0, 0);
+    const kx = Math.cos(((latS + latN) / 2) * Math.PI / 180) * 111320;
+    out._mpp = (lonE - lonW) * kx / out.width; // metres per output pixel
+    return out;
+  };
+  const p = _mlQueue.then(run, run); // serialise regardless of prior outcome
+  _mlQueue = p.catch(() => {});
+  return p;
+}
+
+// -- Fallback basemap: stitch OSM standard raster tiles (free, no key) onto a
+// 2D canvas (no GL context) and crop to the exact bbox. Used only when the
+// MapLibre path above fails.
 async function rasterStitch(lonW, latS, lonE, latN, maxPx = 4096, maxTiles = 80) {
   const TS = 256;
   // Highest zoom that still fits the texture / tile budget. (Capping the LONG
@@ -593,8 +675,16 @@ async function rasterStitch(lonW, latS, lonE, latN, maxPx = 4096, maxTiles = 80)
 }
 
 const OSM_LINK = '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors';
-async function mapCanvasForBbox(lonW, latS, lonE, latN) {
-  return { canvas: await rasterStitch(lonW, latS, lonE, latN), attrib: OSM_LINK };
+const OFM_LINK = OSM_LINK + ' &middot; <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a>';
+async function mapCanvasForBbox(lonW, latS, lonE, latN, px = 3072) {
+  try {
+    const canvas = await mlRender(lonW, latS, lonE, latN, px);
+    return { canvas, attrib: OFM_LINK };
+  } catch {
+    const canvas = await rasterStitch(lonW, latS, lonE, latN);
+    canvas._mpp = null;
+    return { canvas, attrib: OSM_LINK };
+  }
 }
 
 let _earthTex = null;
@@ -662,6 +752,26 @@ async function fetchDem(lonW, latS, lonE, latN) {
 // Vertical scale for real elevation (the relief slider, gentled: default 2x).
 const exagT = () => exag / 6;
 
+// Drape a map crop by TRUE web-mercator position instead of the plane's linear
+// UVs. The crops are mercator images; the slab is an equirectangular mesh, so
+// linear UVs drift from the real geography toward the edges — and because the
+// base and a detail patch cover different bboxes, their drifts differ and the
+// overlap ghosts. Per-vertex mercator UVs pin every layer to the same
+// geography, so they register exactly. `bbox` is the crop's geographic extent.
+function setMercUV(geo, centerX, centerZ, bbox) {
+  const { lat0, lon0, kx, kz } = ride.proj;
+  const mxW = mercX(bbox.lonW), mxE = mercX(bbox.lonE);
+  const myN = mercY(bbox.latN), myS = mercY(bbox.latS);
+  const pos = geo.attributes.position, uv = geo.attributes.uv;
+  for (let i = 0; i < pos.count; i++) {
+    const lon = lon0 + (centerX + pos.getX(i)) / kx;
+    const lat = lat0 - (centerZ + pos.getZ(i)) / kz;
+    uv.setXY(i, (mercX(lon) - mxW) / (mxE - mxW),
+                1 - (mercY(lat) - myN) / (myS - myN));
+  }
+  uv.needsUpdate = true;
+}
+
 // (Re)build the whole specimen block at the current relief: a map-draped top
 // (a heightfield when a DEM is available, flat otherwise), ONE continuous
 // earth wall running from the terrain rim down to the base, and a bottom cap.
@@ -710,6 +820,7 @@ function refreshTerrain(g) {
     }
     geo.setAttribute('color', new THREE.BufferAttribute(shade, 3));
   }
+  if (g.bbox) setMercUV(geo, cx, cz, g.bbox); // exact mercator drape
   g.terrain = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
     map: g.mapTex, vertexColors: !!g.demSample }));
   g.terrain.position.set(cx, 0.15, cz);
@@ -806,8 +917,11 @@ async function buildSlab(g) {
   mapTex.colorSpace = THREE.SRGBColorSpace;
   mapTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
   g.mapTex = mapTex;
-  g.bbox = { lonW, latS, lonE, latN };  // for the detail LOD
-  g.baseZoom = crop._zoom || 0;
+  g.bbox = { lonW, latS, lonE, latN };  // for the detail LOD + mercator UVs
+  // Base resolution in metres/pixel (from MapLibre if available, else derived
+  // from the raster crop); the detail LOD only overlays when it beats this.
+  const kxc = Math.cos(((latS + latN) / 2) * Math.PI / 180) * 111320;
+  g.baseMpp = crop._mpp || ((lonE - lonW) * kxc / crop.width);
 
   // Real relief for the specimen: DEM for the same bbox (flat slab if it fails).
   let dem = null;
@@ -887,10 +1001,13 @@ async function refreshDetail() {
 
   const token = ++detailToken;
   let crop;
-  try { crop = await rasterStitch(lonW, latS, lonE, latN, 6144, 200); }
-  catch { return; }
+  try { crop = await mlRender(lonW, latS, lonE, latN, 3072); }
+  catch {
+    try { crop = await rasterStitch(lonW, latS, lonE, latN, 6144, 200); } catch { return; }
+  }
   if (ride !== g || token !== detailToken) return;        // superseded
-  if ((crop._zoom || 0) <= g.baseZoom) { killDetail(g); return; } // no gain
+  // Overlay only when it's meaningfully sharper than the base.
+  if (crop._mpp && g.baseMpp && crop._mpp > g.baseMpp * 0.7) { killDetail(g); return; }
 
   // Feather the patch edges to alpha 0 so the sharp overlay dissolves into
   // the base texture. Use ONE separable mask f(x)*f(y): overlapping edge
@@ -937,6 +1054,7 @@ async function refreshDetail() {
   for (let i = 0; i < pos.count; i++)
     pos.setY(i, sample(cx + pos.getX(i), cz + pos.getZ(i)) * ex);
   geo.computeVertexNormals();
+  setMercUV(geo, cx, cz, { lonW, latS, lonE, latN }); // register with the base
 
   killDetail(g);
   const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true,
