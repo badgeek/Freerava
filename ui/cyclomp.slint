@@ -526,12 +526,13 @@ export component AppWindow inherits Window {
                 width: 48px;
                 height: 208px;
                 spacing: 4px;
-                // COMPASS: toggle north-up ("N") vs heading-up ("▲", yellow).
+                // COMPASS: toggle north-up ("N") vs heading-up ("^", yellow).
+                // ASCII only: "▲" is tofu in the bundled font (see CLAUDE.md).
                 Rectangle {
                     background: Palette.ink;
                     TouchArea { clicked => { root.map-heading-toggle(); } }
                     Text {
-                        text: root.map-heading-up ? "▲" : "N";
+                        text: root.map-heading-up ? "^" : "N";
                         color: root.map-heading-up ? Palette.yellow
                                                    : Palette.paper;
                         font-size: 18px;
