@@ -111,6 +111,12 @@
   #hint { position: fixed; right: 24px; bottom: 104px; background: var(--card);
     border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow);
     color: var(--muted); font-size: 11.5px; padding: 8px 12px; z-index: 3; }
+
+  /* ---- Map attribution (required by the tile providers) ---- */
+  #attrib { position: fixed; right: 24px; bottom: 74px; background: rgba(255,255,255,.85);
+    border: 1px solid var(--border); border-radius: 6px; color: var(--faint);
+    font-size: 10px; padding: 3px 8px; z-index: 3; }
+  #attrib a { color: var(--muted); text-decoration: none; }
 </style>
 </head>
 <body>
@@ -141,6 +147,7 @@
 </div>
 
 <div id="hint" style="display:none">Drag to orbit &nbsp;·&nbsp; scroll to zoom</div>
+<div id="attrib" style="display:none">&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a></div>
 
 <div id="transport" style="display:none">
   <button id="play" aria-label="Play">&#9654;</button>
@@ -220,8 +227,11 @@ function disposeObj(o) {
 }
 function clearRide() {
   if (!ride) return;
-  for (const o of [ride.route, ride.curtain, ride.head, ride.startDot, ride.endDot])
+  for (const o of [ride.route, ride.curtain, ride.head, ride.startDot,
+                   ride.endDot, ride.slab])
     disposeObj(o);
+  grid.visible = true;
+  document.getElementById('attrib').style.display = 'none';
   ride = null;
 }
 
@@ -236,14 +246,16 @@ function speedColor(v, out) {
 
 function project(coords) {
   // Equirectangular metres around the centroid; north = -Z, up = +Y.
+  // Returns the projection constants too — the map slab reuses them.
   let lat0 = 0, lon0 = 0;
   for (const c of coords) { lon0 += c[0]; lat0 += c[1]; }
   lon0 /= coords.length; lat0 /= coords.length;
   const kx = Math.cos(lat0 * Math.PI / 180) * 111320, kz = 110540;
   let altMin = Infinity;
   for (const c of coords) altMin = Math.min(altMin, c[2] ?? 0);
-  return coords.map(c => new THREE.Vector3(
+  const pts = coords.map(c => new THREE.Vector3(
     (c[0] - lon0) * kx, ((c[2] ?? 0) - altMin), -(c[1] - lat0) * kz));
+  return { pts, lat0, lon0, kx, kz };
 }
 
 // A flat marker: coloured dot with a white ring, like a map pin seen in 3D.
@@ -267,11 +279,12 @@ function buildRide(gj) {
   const speed = feat.properties?.speed_kmh || coords.map(() => 0);
   const tArr = feat.properties?.t_s || coords.map((_, i) => i);
 
-  const P = project(coords);
+  const proj = project(coords);
+  const P = proj.pts;
   const vMax = Math.max(1e-3, ...speed), vMin = Math.min(...speed);
   const vNorm = speed.map(s => (s - vMin) / Math.max(1e-3, vMax - vMin));
 
-  const g = { P, speed, tArr, vNorm, vMin, vMax,
+  const g = { P, proj, coords, speed, tArr, vNorm, vMin, vMax,
               tMin: tArr[0], tMax: tArr[tArr.length - 1],
               summary: gj.properties || {} };
   ride = g;
@@ -287,11 +300,14 @@ function buildRide(gj) {
   frameCamera();
   headT = 1; setProgress(1);
   showChrome(g.summary, vMin, vMax);
+  buildSlab(g); // async: the map diorama pops in when its tiles arrive
 }
+
+const ROUTE_LIFT = 2; // metres above the slab top, so the line never z-fights
 
 function rebuildGeometry() {
   const g = ride; if (!g) return;
-  const pts = g.P.map(p => new THREE.Vector3(p.x, p.y * exag, p.z));
+  const pts = g.P.map(p => new THREE.Vector3(p.x, p.y * exag + ROUTE_LIFT, p.z));
   g.drawn = pts;
 
   // Route line, per-vertex speed colour.
@@ -344,8 +360,119 @@ function rebuildGeometry() {
   setProgress(headT);
 }
 
+// ---- Map diorama: a slab "cut out of the earth" under the route.
+// Basemap raster tiles (CARTO Positron, CORS-enabled) are stitched onto a
+// canvas, cropped to the padded ride bbox, and laid on top of a box whose
+// sides wear a soil/rock gradient. Fails silently (grid stays) when offline.
+const TS = 512; // @2x tiles
+const mercX = lon => (lon + 180) / 360;
+const mercY = lat => {
+  const s = Math.sin(lat * Math.PI / 180);
+  return 0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI);
+};
+const loadImg = url => new Promise((res, rej) => {
+  const im = new Image();
+  im.crossOrigin = 'anonymous';
+  im.onload = () => res(im); im.onerror = () => rej(new Error('tile failed'));
+  im.src = url;
+});
+
+function earthSideTexture() {
+  const c = document.createElement('canvas');
+  c.width = 4; c.height = 128;
+  const x = c.getContext('2d');
+  const grad = x.createLinearGradient(0, 0, 0, 128);
+  grad.addColorStop(0.00, '#d9c7a8'); // thin topsoil line under the map
+  grad.addColorStop(0.06, '#b08a5f');
+  grad.addColorStop(0.45, '#8a6647');
+  grad.addColorStop(1.00, '#5d4531'); // bedrock
+  x.fillStyle = grad; x.fillRect(0, 0, 4, 128);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+async function buildSlab(g) {
+  const { lat0, lon0, kx, kz } = g.proj;
+  // Padded bbox around the ride (25% of span, min 80 m).
+  let lonW = Infinity, lonE = -Infinity, latS = Infinity, latN = -Infinity;
+  for (const c of g.coords) {
+    lonW = Math.min(lonW, c[0]); lonE = Math.max(lonE, c[0]);
+    latS = Math.min(latS, c[1]); latN = Math.max(latN, c[1]);
+  }
+  const padLon = Math.max((lonE - lonW) * 0.25, 80 / kx);
+  const padLat = Math.max((latN - latS) * 0.25, 80 / kz);
+  lonW -= padLon; lonE += padLon; latS -= padLat; latN += padLat;
+
+  // Highest zoom whose crop stays a sane texture size / tile count.
+  let z = 3;
+  for (let cand = 19; cand >= 3; cand--) {
+    const w = (mercX(lonE) - mercX(lonW)) * (1 << cand) * TS;
+    const h = (mercY(latS) - mercY(latN)) * (1 << cand) * TS;
+    const tiles = (Math.floor(mercX(lonE) * (1 << cand)) - Math.floor(mercX(lonW) * (1 << cand)) + 1) *
+                  (Math.floor(mercY(latS) * (1 << cand)) - Math.floor(mercY(latN) * (1 << cand)) + 1);
+    if (Math.max(w, h) <= 2304 && tiles <= 25) { z = cand; break; }
+  }
+
+  const n = 1 << z;
+  const tx0 = Math.floor(mercX(lonW) * n), tx1 = Math.floor(mercX(lonE) * n);
+  const ty0 = Math.floor(mercY(latN) * n), ty1 = Math.floor(mercY(latS) * n);
+  const subs = ['a', 'b', 'c', 'd'];
+  const jobs = [];
+  for (let ty = ty0; ty <= ty1; ty++)
+    for (let tx = tx0; tx <= tx1; tx++)
+      jobs.push(loadImg(`https://${subs[(tx + ty) % 4]}.basemaps.cartocdn.com/light_all/${z}/${tx}/${ty}@2x.png`)
+        .then(im => ({ im, tx, ty })));
+
+  let tiles;
+  try { tiles = await Promise.all(jobs); }
+  catch { return; } // offline / blocked: keep the plain grid
+  if (ride !== g) return; // a newer file was dropped while we fetched
+
+  // Stitch, then crop to the exact bbox.
+  const stitched = document.createElement('canvas');
+  stitched.width = (tx1 - tx0 + 1) * TS; stitched.height = (ty1 - ty0 + 1) * TS;
+  const sc = stitched.getContext('2d');
+  for (const t of tiles) sc.drawImage(t.im, (t.tx - tx0) * TS, (t.ty - ty0) * TS, TS, TS);
+  const px = v => v * n * TS;
+  const sx = px(mercX(lonW)) - tx0 * TS, sy = px(mercY(latN)) - ty0 * TS;
+  const sw = px(mercX(lonE)) - px(mercX(lonW)), sh = px(mercY(latS)) - px(mercY(latN));
+  const crop = document.createElement('canvas');
+  crop.width = Math.max(2, Math.round(sw)); crop.height = Math.max(2, Math.round(sh));
+  crop.getContext('2d').drawImage(stitched, sx, sy, sw, sh, 0, 0, crop.width, crop.height);
+
+  const mapTex = new THREE.CanvasTexture(crop);
+  mapTex.colorSpace = THREE.SRGBColorSpace;
+  mapTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+
+  // World-space slab under the route (top face at y = 0).
+  const xW = (lonW - lon0) * kx, xE = (lonE - lon0) * kx;
+  const zN = -(latN - lat0) * kz, zS = -(latS - lat0) * kz;
+  const w = xE - xW, d = zS - zN;
+  const thick = Math.max(14, 0.06 * Math.max(w, d));
+
+  const slab = new THREE.Group();
+  const sides = new THREE.Mesh(
+    new THREE.BoxGeometry(w, thick, d),
+    new THREE.MeshBasicMaterial({ map: earthSideTexture() }));
+  sides.position.set((xW + xE) / 2, -thick / 2, (zN + zS) / 2);
+  slab.add(sides);
+  const topGeo = new THREE.PlaneGeometry(w, d);
+  topGeo.rotateX(-Math.PI / 2); // plane "up" edge -> -Z = north
+  const top = new THREE.Mesh(topGeo, new THREE.MeshBasicMaterial({ map: mapTex }));
+  top.position.set((xW + xE) / 2, 0.15, (zN + zS) / 2);
+  slab.add(top);
+  scene.add(slab);
+  g.slab = slab;
+
+  grid.visible = false;
+  document.getElementById('attrib').style.display = 'block';
+  if (!follow) frameCamera();
+}
+
 function frameCamera() {
   const box = new THREE.Box3().setFromPoints(ride.drawn);
+  if (ride.slab) box.union(new THREE.Box3().setFromObject(ride.slab));
   const c = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
   const d = Math.max(size.x, size.z, size.y) * 1.7 + 120;
