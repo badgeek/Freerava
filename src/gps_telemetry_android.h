@@ -42,12 +42,18 @@ private:
     // Resolves (and caches) the system LocationManager. Null when the
     // permission is missing or the service is unavailable.
     jobject location_manager(JNIEnv *e);
+    // Keeps the GNSS hardware producing fixes. Without a standing request the
+    // provider's last known location goes stale (and the emulator's `geo fix`
+    // never lands at all). A LocationListener would need a Java class, so the
+    // request is made with a PendingIntent nobody receives.
+    void start_updates(JNIEnv *e, jobject mgr);
 
     // Coarse state of the source, logged only when it changes.
     enum class State { Unknown, NoPermission, NoProvider, Waiting, Fixed };
     void set_state(State s, const char *detail);
 
     jobject manager_ = nullptr; // global ref
+    jobject updates_ = nullptr; // global ref to the standing request's PendingIntent
     bool granted_ = false;
     bool requested_ = false;
     State state_ = State::Unknown;

@@ -46,10 +46,18 @@ bool cleared(JNIEnv *e) {
 } // namespace
 
 AndroidTelemetrySource::~AndroidTelemetrySource() {
-    if (manager_) {
-        if (JNIEnv *e = env()) e->DeleteGlobalRef(manager_);
-        manager_ = nullptr;
+    JNIEnv *e = env();
+    if (e && manager_ && updates_) {
+        jclass mgrCls = e->FindClass("android/location/LocationManager");
+        jmethodID remove =
+            mgrCls ? e->GetMethodID(mgrCls, "removeUpdates", "(Landroid/app/PendingIntent;)V")
+                   : nullptr;
+        if (remove) e->CallVoidMethod(manager_, remove, updates_);
+        cleared(e);
     }
+    if (e && updates_) e->DeleteGlobalRef(updates_);
+    if (e && manager_) e->DeleteGlobalRef(manager_);
+    updates_ = manager_ = nullptr;
 }
 
 JNIEnv *AndroidTelemetrySource::env() {
@@ -123,7 +131,67 @@ jobject AndroidTelemetrySource::location_manager(JNIEnv *e) {
         return nullptr;
     }
     manager_ = e->NewGlobalRef(mgr);
+    start_updates(e, manager_);
     return manager_;
+}
+
+void AndroidTelemetrySource::start_updates(JNIEnv *e, jobject mgr) {
+    if (updates_) return;
+    jobject activity = cyclomp_activity();
+    if (!activity) return;
+
+    const char *failed = nullptr;
+    e->PushLocalFrame(16);
+    do {
+        jclass intentCls = e->FindClass("android/content/Intent");
+        jclass piCls = e->FindClass("android/app/PendingIntent");
+        jclass contextCls = e->FindClass("android/content/Context");
+        jclass mgrCls = e->FindClass("android/location/LocationManager");
+        if (!intentCls || !piCls || !contextCls || !mgrCls) {
+            cleared(e);
+            failed = "classes";
+            break;
+        }
+
+        jobject intent = e->NewObject(
+            intentCls, e->GetMethodID(intentCls, "<init>", "(Ljava/lang/String;)V"),
+            e->NewStringUTF("dev.bauhouse.cyclomp.LOCATION"));
+        jobject pkg = e->CallObjectMethod(
+            activity,
+            e->GetMethodID(contextCls, "getPackageName", "()Ljava/lang/String;"));
+        if (cleared(e) || !intent || !pkg) { failed = "intent"; break; }
+        // Explicit target: nothing listens for it, the request itself is the point.
+        e->CallObjectMethod(
+            intent,
+            e->GetMethodID(intentCls, "setPackage",
+                           "(Ljava/lang/String;)Landroid/content/Intent;"),
+            pkg);
+
+        // LocationManager rejects an immutable PendingIntent ("pending intent
+        // must be mutable") — it fills the fix in. Harmless: setPackage above
+        // makes the intent explicit, so only we can ever receive it.
+        constexpr jint kUpdateCurrent = 0x08000000, kMutable = 0x02000000;
+        jobject pi = e->CallStaticObjectMethod(
+            piCls,
+            e->GetStaticMethodID(
+                piCls, "getBroadcast",
+                "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;"),
+            activity, 0, intent, kUpdateCurrent | kMutable);
+        if (cleared(e) || !pi) { failed = "PendingIntent"; break; }
+
+        e->CallVoidMethod(
+            mgr,
+            e->GetMethodID(mgrCls, "requestLocationUpdates",
+                           "(Ljava/lang/String;JFLandroid/app/PendingIntent;)V"),
+            e->NewStringUTF("gps"), (jlong)1000, (jfloat)0, pi);
+        if (cleared(e)) { failed = "requestLocationUpdates"; break; }
+        updates_ = e->NewGlobalRef(pi);
+        GPS_LOG("gps updates requested (1 Hz)");
+    } while (false);
+    cleared(e);
+    e->PopLocalFrame(nullptr);
+    // Not fatal — last known location may still carry a usable fix.
+    if (failed) GPS_LOG("gps updates unavailable (%s)", failed);
 }
 
 void AndroidTelemetrySource::poll() {
