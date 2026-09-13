@@ -398,13 +398,27 @@ export component AppWindow inherits Window {
                 // Wireframe tunnel while the ride runs: concentric squares
                 // fly outward (quadratic growth = perspective), rate scales
                 // with speed. Drawn before the readout, so it sits behind.
-                if root.ride-state == 1 : Rectangle {
+                if root.ride-state == 1 : tunnel := Rectangle {
                     width: 100%;
                     height: 100%;
-                    property <float> phase:
-                        Math.mod(animation-tick() / 1s * (0.3 + root.speed / 25.0), 1.0);
+                    // Tunnel rate follows the rider, capped so the motion
+                    // stays calm at speed: 0.3..1.0 cycles/s (cap reached
+                    // around 35 km/h). The phase is integrated on a Timer —
+                    // multiplying a running clock by a changing rate would
+                    // make it jump at every speed update.
+                    property <float> phase: 0;
+                    Timer {
+                        interval: 33ms;
+                        running: true;
+                        triggered => {
+                            tunnel.phase = Math.mod(
+                                tunnel.phase + 0.033 *
+                                Math.clamp(0.3 + root.speed / 50.0, 0.3, 1.0),
+                                1.0);
+                        }
+                    }
                     for i in [0, 1, 2, 3, 4, 5] : Rectangle {
-                        property <float> p: Math.mod(parent.phase + i / 6.0, 1.0);
+                        property <float> p: Math.mod(tunnel.phase + i / 6.0, 1.0);
                         width: parent.width * (0.06 + 1.1 * self.p * self.p);
                         height: parent.height * (0.06 + 1.1 * self.p * self.p);
                         x: (parent.width - self.width) / 2;
