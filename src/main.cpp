@@ -4,6 +4,8 @@
 
 #include "cyclomp.h"
 
+#include "core/format.h"
+
 #ifdef CYCLOMP_HAVE_MAPLIBRE
 #include "map_service.h"
 #endif
@@ -104,44 +106,14 @@ struct RideModel {
     int   cadence() const { return speed > 0 ? (int)std::lround(speed * 2.4f + 12) : 0; }
 };
 
-slint::SharedString fmt1(float v) { // one decimal
-    char buf[32];
-    std::snprintf(buf, sizeof buf, "%.1f", v);
-    return slint::SharedString(buf);
-}
-
-slint::SharedString fmt0(float v) { // rounded integer
-    char buf[32];
-    std::snprintf(buf, sizeof buf, "%d", (int)std::lround(v));
-    return slint::SharedString(buf);
-}
-
-slint::SharedString fmt_int(int v) {
-    char buf[32];
-    std::snprintf(buf, sizeof buf, "%d", v);
-    return slint::SharedString(buf);
-}
-
-slint::SharedString mmss(int s) {
-    char buf[16];
-    std::snprintf(buf, sizeof buf, "%02d:%02d", s / 60, s % 60);
-    return slint::SharedString(buf);
-}
-
-slint::SharedString metres(int m) {
-    char buf[24];
-    if (m >= 1000) std::snprintf(buf, sizeof buf, "%.1f km", m / 1000.f);
-    else           std::snprintf(buf, sizeof buf, "%d m", m);
-    return slint::SharedString(buf);
-}
-
-// "07 SEP 14:32" — uppercased month to match the dashboard's type style.
+// Thin SharedString wrappers over the unit-tested core formatters.
+slint::SharedString fmt1(float v) { return slint::SharedString(core::fmt::fmt1(v)); }
+slint::SharedString fmt0(float v) { return slint::SharedString(core::fmt::fmt0(v)); }
+slint::SharedString fmt_int(int v) { return slint::SharedString(core::fmt::fmt_int(v)); }
+slint::SharedString mmss(int s) { return slint::SharedString(core::fmt::mmss(s)); }
+slint::SharedString metres(int m) { return slint::SharedString(core::fmt::metres(m)); }
 slint::SharedString date_label() {
-    std::time_t t = std::time(nullptr);
-    char buf[32];
-    std::strftime(buf, sizeof buf, "%d %b %H:%M", std::localtime(&t));
-    for (char *p = buf; *p; ++p) *p = (char)std::toupper((unsigned char)*p);
-    return slint::SharedString(buf);
+    return slint::SharedString(core::fmt::date_label(std::time(nullptr)));
 }
 
 // Push the model's live values into the UI.
