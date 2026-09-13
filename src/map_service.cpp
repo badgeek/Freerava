@@ -26,7 +26,7 @@
 #endif
 
 namespace {
-constexpr const char *kStyleUrl = "https://tiles.openfreemap.org/styles/positron";
+constexpr const char *kStyleUrl = "https://tiles.openfreemap.org/styles/dark";
 #ifdef __ANDROID__
 // App-private cache dir; created by the system at install time.
 constexpr const char *kCachePath =
