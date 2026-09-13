@@ -34,7 +34,7 @@
 namespace mapgl {
 namespace {
 
-constexpr const char *kStyleUrl = "https://tiles.openfreemap.org/styles/liberty";
+constexpr const char *kStyleUrl = "https://tiles.openfreemap.org/styles/positron";
 constexpr const char *kCachePath =
     "/data/data/dev.bauhouse.cyclomp/cache/cyclomp-mbgl.sqlite";
 constexpr int kBufs = 3;
