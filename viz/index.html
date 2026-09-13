@@ -216,10 +216,17 @@ controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.maxPolarAngle = Math.PI * 0.495; // stay above the ground
 
-// Ground grid (all materials are unlit, so no lights needed).
+// Ground grid.
 const grid = new THREE.GridHelper(4000, 80, COL.grid, COL.grid2);
 grid.material.transparent = true; grid.material.opacity = 0.9;
 scene.add(grid);
+
+// Soft light rig — only the Lambert meshes (terrain, flags, bike) react;
+// the unlit route/curtain/slab-side materials ignore it.
+scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+sun.position.set(300, 600, 200);
+scene.add(sun);
 
 // ---- ride state ----
 let ride = null;
@@ -266,14 +273,65 @@ function project(coords) {
   return { pts, lat0, lon0, kx, kz };
 }
 
-// A flat marker: coloured dot with a white ring, like a map pin seen in 3D.
-function makeDot(color, r) {
+// Start / finish: a little flag on a pole (finish gets a checker texture).
+function makeFlag(color, checkered = false) {
+  const gp = new THREE.Group();
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 24, 8),
+    new THREE.MeshLambertMaterial({ color: 0x8b8b94 }));
+  pole.position.y = 12;
+  gp.add(pole);
+  let mat;
+  if (checkered) {
+    const c = document.createElement('canvas');
+    c.width = c.height = 32;
+    const x = c.getContext('2d');
+    for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) {
+      x.fillStyle = (i + j) % 2 ? '#17171b' : '#ffffff';
+      x.fillRect(i * 8, j * 8, 8, 8);
+    }
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    mat = new THREE.MeshLambertMaterial({ map: t, side: THREE.DoubleSide });
+  } else {
+    mat = new THREE.MeshLambertMaterial({ color, side: THREE.DoubleSide });
+  }
+  const flag = new THREE.Mesh(new THREE.PlaneGeometry(13, 8), mat);
+  flag.position.set(6.9, 19.5, 0);
+  gp.add(flag);
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(2, 3, 1.6, 10),
+    new THREE.MeshLambertMaterial({ color: 0x6d6d78 }));
+  base.position.y = 0.8;
+  gp.add(base);
+  scene.add(gp);
+  return gp;
+}
+
+// Current position: a low-poly bike built from primitives, facing +X.
+function makeBike() {
   const g = new THREE.Group();
-  const ring = new THREE.Mesh(new THREE.SphereGeometry(r * 1.45, 20, 16),
-    new THREE.MeshBasicMaterial({ color: COL.white }));
-  const dot = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 16),
-    new THREE.MeshBasicMaterial({ color }));
-  g.add(ring); g.add(dot);
+  const orange = new THREE.MeshLambertMaterial({ color: COL.accent });
+  const dark = new THREE.MeshLambertMaterial({ color: 0x2b2b31 });
+  const wheelG = new THREE.TorusGeometry(4, 0.8, 6, 14);
+  const w1 = new THREE.Mesh(wheelG, dark); w1.position.set(-5.5, 4, 0); g.add(w1);
+  const w2 = new THREE.Mesh(wheelG, dark); w2.position.set(5.5, 4, 0); g.add(w2);
+  const tube = (ax, ay, bx, by, r = 0.7) => {
+    const a = new THREE.Vector3(ax, ay, 0), b = new THREE.Vector3(bx, by, 0);
+    const d = new THREE.Vector3().subVectors(b, a);
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, d.length(), 6), orange);
+    m.position.copy(a).addScaledVector(d, 0.5);
+    m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.clone().normalize());
+    g.add(m);
+  };
+  tube(-5.5, 4, -1.2, 9.2);   // seat stay
+  tube(-5.5, 4, 1.5, 3.6);    // chain stay
+  tube(1.5, 3.6, -1.2, 9.2);  // seat tube
+  tube(1.5, 3.6, 4.6, 9.2);   // down tube
+  tube(-1.2, 9.2, 4.6, 9.2);  // top tube
+  tube(4.6, 9.2, 5.5, 4);     // fork
+  const saddle = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.9, 1.5), dark);
+  saddle.position.set(-1.6, 10, 0); g.add(saddle);
+  const bars = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 5.2), dark);
+  bars.position.set(4.6, 10, 0); g.add(bars);
   scene.add(g);
   return g;
 }
@@ -301,9 +359,14 @@ function buildRide(gj) {
 
   rebuildGeometry(); // positions depend on the relief slider
 
-  g.startDot = makeDot(COL.start, 5);
-  g.endDot = makeDot(COL.finish, 5);
-  g.head = makeDot(COL.accent, 5.5);
+  // Markers scale with the ride's footprint so a city loop and an alpine
+  // century both read correctly.
+  const span = new THREE.Box3().setFromPoints(P).getSize(new THREE.Vector3());
+  g.mScale = Math.min(30, Math.max(0.35, Math.max(span.x, span.z) / 260));
+  g.startDot = makeFlag(COL.start);
+  g.endDot = makeFlag(null, true); // checkered finish
+  g.head = makeBike();
+  for (const m of [g.startDot, g.endDot, g.head]) m.scale.setScalar(g.mScale);
   g.startDot.position.copy(g.drawn[0]);
   g.endDot.position.copy(g.drawn[g.drawn.length - 1]);
 
@@ -317,7 +380,12 @@ const ROUTE_LIFT = 2; // metres above the slab top, so the line never z-fights
 
 function rebuildGeometry() {
   const g = ride; if (!g) return;
-  const pts = g.P.map(p => new THREE.Vector3(p.x, p.y * exag + ROUTE_LIFT, p.z));
+  // With a DEM the route is draped on the relief (GPS altitude noise would
+  // float it above / sink it below the surface); flat slab keeps GPS profile.
+  const pts = g.P.map(p => {
+    const y = g.demSample ? g.demSample(p.x, p.z) * exagT() : p.y * exag;
+    return new THREE.Vector3(p.x, y + ROUTE_LIFT, p.z);
+  });
   g.drawn = pts;
 
   // Route line, per-vertex speed colour.
@@ -346,7 +414,8 @@ function rebuildGeometry() {
   const cCol = new Float32Array(n * 2 * 3);
   for (let i = 0; i < n; i++) {
     const p = pts[i];
-    cPos.set([p.x, p.y, p.z, p.x, 0, p.z], i * 6);
+    const by = g.demSample ? g.demSample(p.x, p.z) * exagT() : 0;
+    cPos.set([p.x, p.y, p.z, p.x, by, p.z], i * 6);
     speedColor(g.vNorm[i], tmp);
     cCol.set([tmp.r, tmp.g, tmp.b, tmp.r, tmp.g, tmp.b], i * 6);
   }
@@ -497,6 +566,110 @@ function earthSideTexture() {
   return t;
 }
 
+// Terrarium raster-dem stitched + cropped to the bbox, decoded to metres and
+// rebased to its lowest point (the slab's ground level).
+async function fetchDem(lonW, latS, lonE, latN) {
+  const TS = 256;
+  let z = 3;
+  for (let cand = 15; cand >= 3; cand--) {
+    const w = (mercX(lonE) - mercX(lonW)) * (1 << cand) * TS;
+    const h = (mercY(latS) - mercY(latN)) * (1 << cand) * TS;
+    const tiles = (Math.floor(mercX(lonE) * (1 << cand)) - Math.floor(mercX(lonW) * (1 << cand)) + 1) *
+                  (Math.floor(mercY(latS) * (1 << cand)) - Math.floor(mercY(latN) * (1 << cand)) + 1);
+    if (Math.max(w, h) <= 320 && tiles <= 12) { z = cand; break; }
+  }
+  const n = 1 << z;
+  const tx0 = Math.floor(mercX(lonW) * n), tx1 = Math.floor(mercX(lonE) * n);
+  const ty0 = Math.floor(mercY(latN) * n), ty1 = Math.floor(mercY(latS) * n);
+  const jobs = [];
+  for (let ty = ty0; ty <= ty1; ty++)
+    for (let tx = tx0; tx <= tx1; tx++)
+      jobs.push(loadImg(`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${tx}/${ty}.png`)
+        .then(im => ({ im, tx, ty })));
+  const tiles = await Promise.all(jobs);
+  const stitched = document.createElement('canvas');
+  stitched.width = (tx1 - tx0 + 1) * TS; stitched.height = (ty1 - ty0 + 1) * TS;
+  const sc = stitched.getContext('2d');
+  for (const t of tiles) sc.drawImage(t.im, (t.tx - tx0) * TS, (t.ty - ty0) * TS, TS, TS);
+  const px = v => v * n * TS;
+  const sx = px(mercX(lonW)) - tx0 * TS, sy = px(mercY(latN)) - ty0 * TS;
+  const sw = px(mercX(lonE)) - px(mercX(lonW)), sh = px(mercY(latS)) - px(mercY(latN));
+  const nx = Math.max(2, Math.round(sw)), ny = Math.max(2, Math.round(sh));
+  const crop = document.createElement('canvas');
+  crop.width = nx; crop.height = ny;
+  const cc = crop.getContext('2d');
+  cc.drawImage(stitched, sx, sy, sw, sh, 0, 0, nx, ny);
+  const img = cc.getImageData(0, 0, nx, ny).data;
+  const data = new Float32Array(nx * ny);
+  let mn = Infinity;
+  for (let i = 0; i < nx * ny; i++) {
+    const e = img[i * 4] * 256 + img[i * 4 + 1] + img[i * 4 + 2] / 256 - 32768;
+    data[i] = e;
+    if (e < mn) mn = e;
+  }
+  for (let i = 0; i < data.length; i++) data[i] -= mn;
+  return { data, nx, ny };
+}
+
+// Vertical scale for real elevation (the relief slider, gentled: default 2x).
+const exagT = () => exag / 6;
+
+// (Re)build the slab's top at the current relief: a map-draped heightfield
+// with a soil skirt when a DEM is available, a flat plane otherwise.
+function refreshTerrain(g) {
+  if (!g.slab || !g.slabX) return;
+  const kill = m => {
+    if (!m) return;
+    g.slab.remove(m); m.geometry?.dispose?.(); m.material?.dispose?.();
+  };
+  kill(g.terrain); kill(g.skirt); g.terrain = g.skirt = null;
+  const { xW, xE, zN, zS, w, d } = g.slabX;
+  const cx = (xW + xE) / 2, cz = (zN + zS) / 2;
+
+  if (!g.demSample) {
+    const topGeo = new THREE.PlaneGeometry(w, d);
+    topGeo.rotateX(-Math.PI / 2); // plane "up" edge -> -Z = north
+    g.terrain = new THREE.Mesh(topGeo, new THREE.MeshBasicMaterial({ map: g.mapTex }));
+    g.terrain.position.set(cx, 0.15, cz);
+    g.slab.add(g.terrain);
+    return;
+  }
+
+  const ex = exagT();
+  const N = 96;
+  const geo = new THREE.PlaneGeometry(w, d, N - 1, N - 1);
+  geo.rotateX(-Math.PI / 2);
+  const pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++)
+    pos.setY(i, g.demSample(cx + pos.getX(i), cz + pos.getZ(i)) * ex);
+  geo.computeVertexNormals();
+  g.terrain = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ map: g.mapTex }));
+  g.terrain.position.set(cx, 0.15, cz);
+  g.slab.add(g.terrain);
+
+  // Soil skirt: close the gap between the raised relief edge and the box.
+  const idx = (ix, iz) => iz * N + ix;
+  const rim = [];
+  for (let ix = 0; ix < N; ix++) rim.push(idx(ix, 0));
+  for (let iz = 1; iz < N; iz++) rim.push(idx(N - 1, iz));
+  for (let ix = N - 2; ix >= 0; ix--) rim.push(idx(ix, N - 1));
+  for (let iz = N - 2; iz >= 1; iz--) rim.push(idx(0, iz));
+  rim.push(idx(0, 0));
+  const sp = [];
+  for (let k = 0; k < rim.length - 1; k++) {
+    const a = rim[k], b = rim[k + 1];
+    const ax = cx + pos.getX(a), ay = pos.getY(a) + 0.15, az = cz + pos.getZ(a);
+    const bx = cx + pos.getX(b), by = pos.getY(b) + 0.15, bz = cz + pos.getZ(b);
+    sp.push(ax, ay, az, bx, by, bz, ax, -1, az,
+            bx, by, bz, bx, -1, bz, ax, -1, az);
+  }
+  const sg = new THREE.BufferGeometry();
+  sg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(sp), 3));
+  g.skirt = new THREE.Mesh(sg, new THREE.MeshBasicMaterial({
+    color: 0xa97e56, side: THREE.DoubleSide }));
+  g.slab.add(g.skirt);
+}
+
 async function buildSlab(g) {
   const { lat0, lon0, kx, kz } = g.proj;
   // Padded bbox around the ride (25% of span, min 80 m).
@@ -519,26 +692,44 @@ async function buildSlab(g) {
   const mapTex = new THREE.CanvasTexture(crop);
   mapTex.colorSpace = THREE.SRGBColorSpace;
   mapTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  g.mapTex = mapTex;
 
-  // World-space slab under the route (top face at y = 0).
+  // Real relief for the specimen: DEM for the same bbox (flat slab if it fails).
+  let dem = null;
+  try { dem = await fetchDem(lonW, latS, lonE, latN); } catch {}
+  if (ride !== g) return;
+
+  // World-space slab under the route (relief grows up from y = 0).
   const xW = (lonW - lon0) * kx, xE = (lonE - lon0) * kx;
   const zN = -(latN - lat0) * kz, zS = -(latS - lat0) * kz;
   const w = xE - xW, d = zS - zN;
-  const thick = Math.max(14, 0.06 * Math.max(w, d));
+  g.slabX = { xW, xE, zN, zS, w, d };
+  if (dem) {
+    const { data, nx, ny } = dem;
+    g.demSample = (x, zc) => { // bilinear metres-above-slab-base
+      const u = Math.min(1, Math.max(0, (x - xW) / w)) * (nx - 1);
+      const v = Math.min(1, Math.max(0, (zc - zN) / d)) * (ny - 1);
+      const x0 = Math.floor(u), y0 = Math.floor(v);
+      const x1 = Math.min(nx - 1, x0 + 1), y1 = Math.min(ny - 1, y0 + 1);
+      const fx = u - x0, fy = v - y0;
+      const a = data[y0 * nx + x0] * (1 - fx) + data[y0 * nx + x1] * fx;
+      const b = data[y1 * nx + x0] * (1 - fx) + data[y1 * nx + x1] * fx;
+      return a * (1 - fy) + b * fy;
+    };
+  }
 
+  const thick = Math.max(14, 0.06 * Math.max(w, d));
   const slab = new THREE.Group();
   const sides = new THREE.Mesh(
     new THREE.BoxGeometry(w, thick, d),
     new THREE.MeshBasicMaterial({ map: earthSideTexture() }));
   sides.position.set((xW + xE) / 2, -thick / 2, (zN + zS) / 2);
   slab.add(sides);
-  const topGeo = new THREE.PlaneGeometry(w, d);
-  topGeo.rotateX(-Math.PI / 2); // plane "up" edge -> -Z = north
-  const top = new THREE.Mesh(topGeo, new THREE.MeshBasicMaterial({ map: mapTex }));
-  top.position.set((xW + xE) / 2, 0.15, (zN + zS) / 2);
-  slab.add(top);
   scene.add(slab);
   g.slab = slab;
+
+  refreshTerrain(g);   // heightfield (or flat) top
+  rebuildGeometry();   // drape the route + curtain onto the relief
 
   grid.visible = false;
   document.getElementById('attrib').style.display = 'block';
@@ -566,11 +757,25 @@ const DEM = {
   attribution: 'Terrain &copy; Mapzen/AWS Open Data',
 };
 
-function domMarker(color, size) {
+// SVG markers for the live map: flags for start/finish, a bike for the head.
+const FLAG_SVG = fill => `<svg viewBox="0 0 24 24" width="100%" height="100%">
+  <path d="M5 21V4" stroke="#444" stroke-width="2" stroke-linecap="round"/>
+  <path d="M6 4h11l-2.8 4L17 12H6z" fill="${fill}"/></svg>`;
+const CHECK_SVG = `<svg viewBox="0 0 24 24" width="100%" height="100%">
+  <path d="M5 21V4" stroke="#444" stroke-width="2" stroke-linecap="round"/>
+  <rect x="6" y="4" width="11" height="8" fill="#fff" stroke="#111" stroke-width=".6"/>
+  <rect x="6" y="4" width="2.75" height="2.67" fill="#111"/><rect x="11.5" y="4" width="2.75" height="2.67" fill="#111"/>
+  <rect x="8.75" y="6.67" width="2.75" height="2.67" fill="#111"/><rect x="14.25" y="6.67" width="2.75" height="2.67" fill="#111"/>
+  <rect x="6" y="9.33" width="2.75" height="2.67" fill="#111"/><rect x="11.5" y="9.33" width="2.75" height="2.67" fill="#111"/></svg>`;
+const BIKE_SVG = `<svg viewBox="0 0 24 24" width="100%" height="100%">
+  <circle cx="12" cy="12" r="11.4" fill="#fff"/>
+  <path fill="#fc5200" transform="translate(3.6,3.6) scale(0.7)" d="M15.5 5.5c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zM5 12c-2.8 0-5 2.2-5 5s2.2 5 5 5 5-2.2 5-5-2.2-5-5-5zm0 8.5c-1.9 0-3.5-1.6-3.5-3.5S3.1 13.5 5 13.5 8.5 15.1 8.5 17 6.9 20.5 5 20.5zm5.8-10 2.4-2.4.8.8c1.3 1.3 3 2.1 5.1 2.1V9c-1.5 0-2.7-.6-3.6-1.5l-1.9-1.9c-.5-.4-1-.6-1.6-.6s-1.1.2-1.4.6L7.8 8.4c-.4.4-.6.9-.6 1.4 0 .6.2 1.1.6 1.4L11 14v5h2v-6.2l-2.2-2.3zM19 12c-2.8 0-5 2.2-5 5s2.2 5 5 5 5-2.2 5-5-2.2-5-5-5zm0 8.5c-1.9 0-3.5-1.6-3.5-3.5s1.6-3.5 3.5-3.5 3.5 1.6 3.5 3.5-1.6 3.5-3.5 3.5z"/></svg>`;
+function iconMarker(svg, size, anchor) {
   const d = document.createElement('div');
-  d.style.cssText = `width:${size}px;height:${size}px;border-radius:50%;` +
-    `background:${color};border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4);`;
-  return new maplibregl.Marker({ element: d });
+  d.style.cssText = `width:${size}px;height:${size}px;` +
+    `filter:drop-shadow(0 1px 2px rgba(0,0,0,.35));`;
+  d.innerHTML = svg;
+  return new maplibregl.Marker({ element: d, anchor });
 }
 
 // line-progress -> colour, sampled along cumulative distance (<= ~48 stops).
@@ -618,6 +823,8 @@ function ensureLiveMap() {
     },
     maxZoom: 18,
     maxPitch: 85,
+    center: [g.coords[0][0], g.coords[0][1]], // near the ride from frame one
+    zoom: 13,
   });
   liveMap.addControl(new maplibregl.NavigationControl({
     visualizePitch: true, showZoom: true, showCompass: true }), 'bottom-right');
@@ -634,12 +841,14 @@ function ensureLiveMap() {
     liveMap.addLayer({ id: 'route', type: 'line', source: 'route',
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: { 'line-width': 4.5, 'line-gradient': gradientStops(g) } });
-    g.mapStart = domMarker('#16a34a', 12).setLngLat(line[0]).addTo(liveMap);
-    g.mapEnd = domMarker('#dc2626', 12).setLngLat(line[line.length - 1]).addTo(liveMap);
-    g.mapHead = domMarker('#fc5200', 16).setLngLat(line[0]).addTo(liveMap);
+    g.mapStart = iconMarker(FLAG_SVG('#16a34a'), 30, 'bottom').setLngLat(line[0]).addTo(liveMap);
+    g.mapEnd = iconMarker(CHECK_SVG, 30, 'bottom').setLngLat(line[line.length - 1]).addTo(liveMap);
+    g.mapHead = iconMarker(BIKE_SVG, 26, 'center').setLngLat(line[0]).addTo(liveMap);
     const b = new maplibregl.LngLatBounds();
     for (const c of line) b.extend(c);
-    liveMap.fitBounds(b, { padding: 90, duration: 0, pitch: 60 });
+    // fitBounds' zoom math assumes pitch 0 — fit flat first, tilt after.
+    try { liveMap.fitBounds(b, { padding: 90, duration: 0 }); } catch {}
+    liveMap.easeTo({ pitch: 60, duration: 800 });
     setProgress(headT);
   });
 }
@@ -676,6 +885,10 @@ function setProgress(frac) {
   const f = tb > ta ? (t - ta) / (tb - ta) : 0;
   const hp = a.clone().lerp(b, f);
   g.head.position.copy(hp);
+  // Point the bike along the direction of travel.
+  const dxw = b.x - a.x, dzw = b.z - a.z;
+  if (Math.abs(dxw) + Math.abs(dzw) > 1e-6)
+    g.head.rotation.y = Math.atan2(-dzw, dxw);
 
   if (follow && !mapMode) {
     const off = new THREE.Vector3(80, 120, 140);
@@ -785,7 +998,8 @@ document.getElementById('viewtoggle').addEventListener('click', async () => {
   }
 });
 document.getElementById('exag').addEventListener('input', e => {
-  exag = Number(e.target.value); if (ride) rebuildGeometry();
+  exag = Number(e.target.value);
+  if (ride) { rebuildGeometry(); if (ride.demSample) refreshTerrain(ride); }
 });
 
 // ---- loop ----
