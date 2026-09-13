@@ -124,6 +124,33 @@ Rules that kept this codebase healthy:
   the clock run 2×. There's a regression test.
 - grep-ing build output for "error" false-positives on `error_sink.cpp.o`.
 
+## Debugging toolbox (proven on this project)
+
+- **Native crash triage**: `adb logcat -d -b crash` (aborts land there, e.g.
+  an uncaught `std::bad_optional_access`). Symbolize the `#01 pc <offset>`
+  frames against the UNSTRIPPED lib:
+  `$NDK/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-addr2line -Cfe
+  android/build/intermediates/cxx/Debug/*/obj/arm64-v8a/libcyclomp.so <pc>`.
+  FIRST verify the Build ID matches (`llvm-readelf -n` vs the crash dump) —
+  every gradle build overwrites the lib, so symbolize crashes IMMEDIATELY
+  or the addresses become garbage against the wrong binary.
+- **App files without root**: `adb shell run-as dev.bauhouse.cyclomp cat
+  files/settings.txt` (also sessions.txt). WRITING settings this way is the
+  practical replacement for env vars (zygote blocks them): e.g. force the
+  mock ride on the emulator with
+  `run-as dev.bauhouse.cyclomp sh -c 'printf "mock_ride=1\n" > files/settings.txt'`.
+- **Log tags**: `cyclomp-mapgl` (map service lifecycle, texture imports,
+  bearing), `cyclomp-compass`; `cyclomp-map`/`cyclomp-http` only with
+  `-DCYCLOMP_MAP_VERBOSE=ON`. Filter: `adb logcat -s cyclomp-mapgl:I`.
+- **CPU sampling**: `adb shell "top -b -n 5 -d 2 -o PID,%CPU,RSS,ARGS |
+  grep cyclomp"`. Baseline: idle dashboard ~1-10%; the tunnel animation at
+  30fps adds ~55-60% (full-screen Skia redraw) — TUNNEL FPS / TUNNEL
+  ANIMATION in SYSTEM PARAMETERS exist to tune that. `dumpsys batterystats`
+  per-uid mAh stays empty while the phone is on the charger.
+- **Driving the UI over adb**: coordinates for `input tap` come from a
+  fresh `exec-out screencap -p` — the user may have navigated the app in
+  the meantime, so re-screenshot before every scripted tap sequence.
+
 ## Verification routine (what "done" means here)
 
 1. `ctest --test-dir build` green (5k+ assertions).
