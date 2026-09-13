@@ -735,6 +735,10 @@ function frameCamera() {
   // Haze only well beyond the framed block, so it reads as depth on a
   // distant corner without ever veiling the map.
   scene.fog.near = d * 1.6; scene.fog.far = d * 6;
+  // Default chase distance, and scroll limits that suit this ride's scale.
+  ride.chaseDist = Math.min(1600, Math.max(160, d * 0.22));
+  controls.minDistance = Math.max(25, d / 400);
+  controls.maxDistance = d * 6;
 }
 
 // Reveal + head position, driven by time fraction 0..1.
@@ -762,11 +766,30 @@ function setProgress(frac) {
   if (Math.abs(dxw) + Math.abs(dzw) > 1e-6)
     g.head.rotation.y = Math.atan2(-dzw, dxw);
 
+  g.headPos = hp;
+  // Chase cam: translate BOTH the orbit target and the camera by the same
+  // delta. That follows the bike while leaving the offset vector — i.e. the
+  // angle and distance the user set by dragging and scrolling — untouched,
+  // so OrbitControls stays fully usable mid-chase. (Assigning
+  // camera.position outright, as this used to, fought the controls and
+  // pinned the view at one fixed distance.)
   if (follow) {
-    const off = new THREE.Vector3(80, 120, 140);
-    controls.target.lerp(hp, 0.12);
-    camera.position.lerp(hp.clone().add(off), 0.08);
+    const step = hp.clone().sub(controls.target).multiplyScalar(0.15);
+    controls.target.add(step);
+    camera.position.add(step);
   }
+}
+
+// Put the camera at a comfortable chase distance, keeping the direction the
+// user is currently viewing from.
+function chaseSnap() {
+  const g = ride; if (!g) return;
+  const hp = g.headPos || g.drawn[0];
+  const dir = camera.position.clone().sub(controls.target);
+  if (dir.lengthSq() < 1e-6) dir.set(0.55, 0.6, 0.75);
+  dir.normalize().multiplyScalar(g.chaseDist);
+  controls.target.copy(hp);
+  camera.position.copy(hp).add(dir);
 }
 
 function mmss(s) {
@@ -840,7 +863,9 @@ document.getElementById('scrub').addEventListener('input', e => {
 });
 document.getElementById('follow').addEventListener('click', e => {
   follow = !follow; e.target.classList.toggle('on', follow);
-  if (!follow && ride) frameCamera();
+  if (!ride) return;
+  if (follow) chaseSnap();   // pull back to a sensible chase distance
+  else frameCamera();        // back to the framed overview
 });
 document.getElementById('exag').addEventListener('input', e => {
   exag = Number(e.target.value);
