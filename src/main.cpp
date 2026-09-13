@@ -526,6 +526,12 @@ int main(int, char **)
         // context once they exist.
         auto err = ui->window().set_rendering_notifier(
             [](slint::RenderingState st, slint::GraphicsAPI) {
+                // App switch: the GL context dies with the surface — forget
+                // the imported textures so resume re-imports them.
+                if (st == slint::RenderingState::RenderingTeardown) {
+                    mapgl::ui_reset();
+                    return;
+                }
                 if (st != slint::RenderingState::BeforeRendering) return;
                 mapgl::ui_import_all();
             });

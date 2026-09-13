@@ -30,6 +30,11 @@ bool ui_import_all();
 // Texture id (in Slint's context) for buffer idx; valid after ui_import_all.
 uint32_t ui_texture(uint32_t idx);
 
+// Slint's GL context is going away (app switched to background): forget the
+// imported textures so the next ui_import_all re-imports into the new
+// context. Call from the rendering notifier on RenderingTeardown.
+void ui_reset();
+
 // Queue a camera move; safe from any thread. zoom <= 0 keeps the current
 // zoom level (used by follow-mode so pinch zoom isn't overridden).
 void set_camera(double lat, double lon, double zoom);

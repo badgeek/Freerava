@@ -346,7 +346,14 @@ void set_frame_sink(
 
 bool ui_import_all() {
     auto &s = svc();
-    if (s.uiImported.load()) return true;
+    if (s.uiImported.load()) {
+        // An app switch can silently recreate Slint's GL context; the old
+        // texture ids then belong to a dead context and the map turns
+        // blank. Detect that and re-import into the new context.
+        if (glIsTexture(s.uiTex[0])) return true;
+        MAPGL_LOG("UI textures stale (context recreated) — re-importing");
+        ui_reset();
+    }
     if (!s.buffersReady.load()) return false;
     if (!resolve_ext()) return false;
     glGenTextures(kBufs, s.uiTex);
@@ -360,7 +367,18 @@ bool ui_import_all() {
     }
     s.uiImported.store(true);
     MAPGL_LOG("UI-side AHB textures imported");
+    // Push a fresh frame through the new textures — the Image the UI still
+    // holds references a texture from the old context.
+    poke();
     return true;
+}
+
+void ui_reset() {
+    auto &s = svc();
+    s.uiImported.store(false);
+    // No GL calls here: the context these ids lived in is already gone.
+    for (int i = 0; i < kBufs; ++i) s.uiTex[i] = 0;
+    MAPGL_LOG("UI textures reset (context teardown)");
 }
 
 uint32_t ui_texture(uint32_t idx) {
