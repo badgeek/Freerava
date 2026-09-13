@@ -29,6 +29,85 @@ endif()
 target_link_libraries(cyclomp PRIVATE Slint::Slint)
 slint_target_sources(cyclomp ui/cyclomp.slint)
 
+# ---- Optional MapLibre map (mbgl core embedded, no Java SDK) ----
+# Expects a maplibre-native checkout with prebuilt cores:
+#   build-macos-metal/  (desktop)   build-android/  (arm64-v8a)
+set(CYCLOMP_MLN_DIR "/tmp/maplibre-native" CACHE PATH
+    "maplibre-native checkout containing prebuilt core libraries")
+set(_mln_vendor_includes
+    ${CYCLOMP_MLN_DIR}/vendor/expected-lite/include
+    ${CYCLOMP_MLN_DIR}/vendor/maplibre-native-base/include
+    ${CYCLOMP_MLN_DIR}/vendor/maplibre-native-base/deps/cheap-ruler-cpp/include
+    ${CYCLOMP_MLN_DIR}/vendor/maplibre-native-base/deps/geojson-vt-cpp/include
+    ${CYCLOMP_MLN_DIR}/vendor/maplibre-native-base/deps/geojson.hpp/include
+    ${CYCLOMP_MLN_DIR}/vendor/maplibre-native-base/deps/geometry.hpp/include
+    ${CYCLOMP_MLN_DIR}/vendor/maplibre-native-base/deps/variant/include
+    ${CYCLOMP_MLN_DIR}/vendor/rapidjson/include
+    ${CYCLOMP_MLN_DIR}/vendor/unordered_dense/include)
+
+set(_mln_build_mac "${CYCLOMP_MLN_DIR}/build-macos-metal")
+if(APPLE AND NOT ANDROID AND EXISTS "${_mln_build_mac}/libmbgl-core.a")
+    message(STATUS "cyclomp: MapLibre map enabled (${_mln_build_mac})")
+    target_sources(cyclomp PRIVATE src/map_service.cpp)
+    target_compile_definitions(cyclomp PRIVATE CYCLOMP_HAVE_MAPLIBRE)
+    target_include_directories(cyclomp PRIVATE
+        ${CYCLOMP_MLN_DIR}/include
+        ${CYCLOMP_MLN_DIR}/platform/darwin/include
+        ${CYCLOMP_MLN_DIR}/platform/default/include)
+    target_include_directories(cyclomp SYSTEM PRIVATE ${_mln_vendor_includes})
+    target_link_libraries(cyclomp PRIVATE
+        ${_mln_build_mac}/libmbgl-core.a
+        ${_mln_build_mac}/libmbgl-vendor-parsedate.a
+        ${_mln_build_mac}/vendor/maplibre-tile-spec/cpp/libmlt-cpp.a
+        ${_mln_build_mac}/vendor/maplibre-tile-spec/cpp/libfastpfor-lib.a
+        ${_mln_build_mac}/libmbgl-vendor-csscolorparser.a
+        ${_mln_build_mac}/libmbgl-harfbuzz.a
+        ${_mln_build_mac}/libmbgl-freetype.a
+        ${_mln_build_mac}/libmbgl-vendor-icu.a
+        sqlite3 z
+        /opt/homebrew/opt/libuv/lib/libuv.dylib
+        "-framework AppKit"
+        "-framework CoreGraphics"
+        "-framework CoreImage"
+        "-framework CoreLocation"
+        "-framework Metal"
+        "-framework SystemConfiguration")
+endif()
+
+set(_mln_build_android "${CYCLOMP_MLN_DIR}/build-android")
+if(ANDROID)
+    target_link_libraries(cyclomp PRIVATE log android)
+    if(EXISTS "${_mln_build_android}/libmbgl-core.a")
+        message(STATUS "cyclomp: MapLibre map enabled for Android (${_mln_build_android})")
+        target_sources(cyclomp PRIVATE
+            src/map_service.cpp
+            src/http_file_source_android.cpp
+            # Platform pieces the Java SDK would normally provide:
+            ${CYCLOMP_MLN_DIR}/platform/android/src/test/collator_test_stub.cpp
+            ${CYCLOMP_MLN_DIR}/platform/android/src/test/number_format_test_stub.cpp
+            ${CYCLOMP_MLN_DIR}/platform/default/src/mln/text/local_glyph_rasterizer.cpp)
+        target_compile_definitions(cyclomp PRIVATE CYCLOMP_HAVE_MAPLIBRE)
+        target_include_directories(cyclomp PRIVATE
+            ${CYCLOMP_MLN_DIR}/include
+            ${CYCLOMP_MLN_DIR}/src           # HTTPFileSource declaration
+            ${CYCLOMP_MLN_DIR}/platform/default/include)
+        target_include_directories(cyclomp SYSTEM PRIVATE ${_mln_vendor_includes})
+        target_link_libraries(cyclomp PRIVATE
+            "-Wl,--start-group"
+            ${_mln_build_android}/libmbgl-core.a
+            ${_mln_build_android}/libmbgl-vendor-parsedate.a
+            ${_mln_build_android}/vendor/maplibre-tile-spec/cpp/libmlt-cpp.a
+            ${_mln_build_android}/vendor/maplibre-tile-spec/cpp/libfastpfor-lib.a
+            ${_mln_build_android}/libmbgl-vendor-csscolorparser.a
+            ${_mln_build_android}/libmbgl-harfbuzz.a
+            ${_mln_build_android}/libmbgl-freetype.a
+            ${_mln_build_android}/libmbgl-vendor-icu.a
+            ${_mln_build_android}/libmbgl-vendor-sqlite.a
+            "-Wl,--end-group"
+            EGL GLESv3 z atomic jnigraphics)
+    endif()
+endif()
+
 if (WIN32)
     add_custom_command(TARGET cyclomp POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_RUNTIME_DLLS:cyclomp> $<TARGET_FILE_DIR:cyclomp>

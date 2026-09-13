@@ -103,6 +103,32 @@ component NavStrip inherits Rectangle {
     }
 }
 
+// A bottom tab-bar item with a yellow active indicator.
+component TabItem inherits Rectangle {
+    in property <string> label;
+    in property <bool> active;
+    callback pressed();
+    background: root.active ? Palette.ash : Palette.ink;
+    TouchArea {
+        clicked => { root.pressed(); }
+    }
+    VerticalLayout {
+        Rectangle {
+            height: 4px;
+            background: root.active ? Palette.yellow : transparent;
+        }
+        Text {
+            text: root.label;
+            color: root.active ? Palette.paper : Palette.mute;
+            font-size: 14px;
+            font-weight: 900;
+            letter-spacing: 2px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}
+
 // A ride/pause/stop control button.
 component ControlButton inherits Rectangle {
     in property <string> label;
@@ -148,12 +174,17 @@ export component AppWindow inherits Window {
     // Saved rides, newest first (C++ owns the model).
     in property <[SessionRow]> sessions;
 
-    // 0 = live dashboard, 1 = history list.
+    // 0 = live dashboard, 1 = map, 2 = history list.
     in-out property <int> screen: 0;
     in-out property <int> selected-session: -1;
 
+    // ---- Map (rendered off-screen by MapLibre; C++ pushes RGBA frames) ----
+    in property <image> map-frame;
+    in property <bool> map-available: false;
+
     callback toggle-ride();  // idle->start, running->pause, paused->resume
     callback stop-ride();    // finalize + save session
+    callback map-zoom(int);  // +1 / -1 zoom step
 
     property <color> hr-color: root.hr-zone >= 4 ? Palette.red
                              : root.hr-zone == 3 ? Palette.yellow
@@ -287,8 +318,135 @@ export component AppWindow inherits Window {
             }
         }
 
+        // ================= MAP =================
+        if root.screen == 1 : Rectangle {
+            vertical-stretch: 1;
+            background: Palette.ink;
+
+            if root.map-available : Image {
+                width: 100%;
+                height: 100%;
+                source: root.map-frame;
+                image-fit: cover;
+            }
+
+            // Placeholder until the platform has a map renderer.
+            if !root.map-available : VerticalLayout {
+                alignment: center;
+                spacing: 12px;
+                Rectangle {
+                    height: 18px;
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: 8px;
+                        Rectangle { width: 18px; height: 18px; background: Palette.yellow; }
+                        Rectangle { width: 18px; height: 18px; background: Palette.red; }
+                        Rectangle { width: 18px; height: 18px; background: Palette.blue; }
+                    }
+                }
+                Text {
+                    text: "MAP";
+                    color: Palette.paper;
+                    font-size: 28px;
+                    font-weight: 900;
+                    letter-spacing: 4px;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: "RENDERER PORT IN PROGRESS";
+                    color: Palette.mute;
+                    font-size: 12px;
+                    font-weight: 700;
+                    letter-spacing: 2px;
+                    horizontal-alignment: center;
+                }
+            }
+
+            // Rider position marker: map camera is centered on the rider.
+            if root.map-available : Rectangle {
+                width: 18px;
+                height: 18px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                background: Palette.red;
+                border-width: 3px;
+                border-color: Palette.paper;
+            }
+
+            // Live ride chip while riding.
+            if root.map-available && root.ride-state != 0 : Rectangle {
+                x: 8px;
+                y: 8px;
+                width: chip.preferred-width + 24px;
+                height: 44px;
+                background: Palette.ink;
+                chip := HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    spacing: 8px;
+                    alignment: start;
+                    Text {
+                        text: "\{Math.round(root.speed)} km/h";
+                        color: Palette.yellow;
+                        font-size: 16px;
+                        font-weight: 900;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: "\{root.distance} km";
+                        color: Palette.paper;
+                        font-size: 16px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // Zoom controls.
+            if root.map-available : VerticalLayout {
+                x: parent.width - 56px;
+                y: parent.height - 116px;
+                width: 48px;
+                height: 100px;
+                spacing: 4px;
+                Rectangle {
+                    background: Palette.ink;
+                    TouchArea { clicked => { root.map-zoom(1); } }
+                    Text {
+                        text: "+";
+                        color: Palette.paper;
+                        font-size: 24px;
+                        font-weight: 900;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                Rectangle {
+                    background: Palette.ink;
+                    TouchArea { clicked => { root.map-zoom(-1); } }
+                    Text {
+                        text: "−";
+                        color: Palette.paper;
+                        font-size: 24px;
+                        font-weight: 900;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // Attribution.
+            if root.map-available : Text {
+                x: 8px;
+                y: parent.height - 20px;
+                text: "© MapLibre  © OpenStreetMap";
+                color: Palette.mute;
+                font-size: 10px;
+            }
+        }
+
         // ================= HISTORY =================
-        if root.screen == 1 : VerticalLayout {
+        if root.screen == 2 : VerticalLayout {
             vertical-stretch: 1;
 
             // header
@@ -431,50 +589,23 @@ export component AppWindow inherits Window {
             }
         }
 
-        // ---- Tab bar: RIDE | HISTORY ----
+        // ---- Tab bar: RIDE | MAP | HISTORY ----
         HorizontalLayout {
             height: 52px;
-            Rectangle {
-                background: root.screen == 0 ? Palette.ash : Palette.ink;
-                TouchArea {
-                    clicked => { root.screen = 0; }
-                }
-                VerticalLayout {
-                    Rectangle {
-                        height: 4px;
-                        background: root.screen == 0 ? Palette.yellow : transparent;
-                    }
-                    Text {
-                        text: "RIDE";
-                        color: root.screen == 0 ? Palette.paper : Palette.mute;
-                        font-size: 14px;
-                        font-weight: 900;
-                        letter-spacing: 2px;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                }
+            TabItem {
+                label: "RIDE";
+                active: root.screen == 0;
+                pressed => { root.screen = 0; }
             }
-            Rectangle {
-                background: root.screen == 1 ? Palette.ash : Palette.ink;
-                TouchArea {
-                    clicked => { root.screen = 1; }
-                }
-                VerticalLayout {
-                    Rectangle {
-                        height: 4px;
-                        background: root.screen == 1 ? Palette.yellow : transparent;
-                    }
-                    Text {
-                        text: "HISTORY";
-                        color: root.screen == 1 ? Palette.paper : Palette.mute;
-                        font-size: 14px;
-                        font-weight: 900;
-                        letter-spacing: 2px;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                }
+            TabItem {
+                label: "MAP";
+                active: root.screen == 1;
+                pressed => { root.screen = 1; }
+            }
+            TabItem {
+                label: "HISTORY";
+                active: root.screen == 2;
+                pressed => { root.screen = 2; }
             }
         }
 

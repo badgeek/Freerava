@@ -4,11 +4,17 @@
 
 #include "cyclomp.h"
 
+#ifdef CYCLOMP_HAVE_MAPLIBRE
+#include "map_service.h"
+#endif
+
+#include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <memory>
 
@@ -40,6 +46,12 @@ struct RideModel {
     int   samples   = 0;
     int   nav_m     = 400; // metres to next turn
 
+    // Mock position (Bandung); wanders while riding. Survives reset() so
+    // consecutive rides continue from where the last one ended.
+    double lat = -6.9147;
+    double lon = 107.6098;
+    float  heading_deg = 90.f;
+
     void reset() {
         elapsed_s = 0.f;
         dist_km = 0.f;
@@ -61,6 +73,13 @@ struct RideModel {
         if (speed < 8.f)  speed = 8.f;
         if (speed > 42.f) speed = 42.f;
         if (speed > max_speed) max_speed = speed;
+
+        // Wander the mock position along a slowly-turning heading.
+        heading_deg += rng.centered() * 24.f;
+        double d_km = speed * (dt_s / 3600.f);
+        double rad = heading_deg * M_PI / 180.0;
+        lat += (d_km * std::cos(rad)) / 111.32;
+        lon += (d_km * std::sin(rad)) / (111.32 * std::cos(lat * M_PI / 180.0));
 
         dist_km   += speed * (dt_s / 3600.f);
         sum_speed += speed;
@@ -149,6 +168,39 @@ void publish_idle(AppWindow &w) {
 } // namespace
 
 #ifdef __ANDROID__
+// Capture the JavaVM for the JNI HTTP transport (map tiles). NativeActivity
+// dlsym's ANativeActivity_onCreate from OUR lib before libslint_cpp.so, so we
+// grab activity->vm here and forward to Slint's real entry point.
+#include "android_env.h"
+#include <android/native_activity.h>
+#include <dlfcn.h>
+
+namespace {
+JavaVM *g_java_vm = nullptr;
+}
+JavaVM *cyclomp_java_vm() { return g_java_vm; }
+
+#ifdef CYCLOMP_HAVE_MAPLIBRE
+// mbgl-core's android platform threads attach to the JVM through this global
+// (normally assigned by the Java SDK's JNI_OnLoad, which we don't have).
+namespace mln { namespace android { extern JavaVM *theJVM; } }
+#endif
+
+extern "C" JNIEXPORT void ANativeActivity_onCreate(
+    ANativeActivity *activity, void *savedState, size_t savedStateSize) {
+    g_java_vm = activity->vm;
+#ifdef CYCLOMP_HAVE_MAPLIBRE
+    mln::android::theJVM = activity->vm;
+#endif
+    using Fn = void (*)(ANativeActivity *, void *, size_t);
+    void *h = dlopen("libslint_cpp.so", RTLD_NOW);
+    Fn real = h ? (Fn)dlsym(h, "ANativeActivity_onCreate") : nullptr;
+    if (real && real != &ANativeActivity_onCreate)
+        real(activity, savedState, savedStateSize);
+}
+#endif
+
+#ifdef __ANDROID__
 extern "C" void slint_main()
 #else
 int main(int, char **)
@@ -161,6 +213,52 @@ int main(int, char **)
     auto sessions = std::make_shared<slint::VectorModel<SessionRow>>();
     ui->set_sessions(sessions);
     publish_idle(*ui);
+
+    // Debug: start on a given screen (0 ride / 1 map / 2 history).
+    if (const char *s = std::getenv("CYCLOMP_SCREEN"))
+        ui->set_screen(std::atoi(s));
+
+    // ---- Map hook: camera follows the (mock) rider ----
+    struct MapHook {
+#ifdef CYCLOMP_HAVE_MAPLIBRE
+        std::unique_ptr<MapService> service;
+#endif
+        double zoom = 15.0;
+        void push(const RideModel &m) {
+#ifdef CYCLOMP_HAVE_MAPLIBRE
+            if (service) service->set_camera(m.lat, m.lon, zoom);
+#else
+            (void)m;
+#endif
+        }
+    };
+    auto map_hook = std::make_shared<MapHook>();
+#ifdef CYCLOMP_HAVE_MAPLIBRE
+    map_hook->service = std::make_unique<MapService>(
+        480, 720,
+        [ui = slint::ComponentWeakHandle(ui)](uint32_t w, uint32_t h,
+                                              std::vector<uint8_t> rgba) {
+            // Frame arrives on the map thread; hop to the UI thread.
+            slint::invoke_from_event_loop(
+                [ui, w, h, rgba = std::move(rgba)] {
+                    auto u = ui.lock();
+                    if (!u) return;
+                    slint::SharedPixelBuffer<slint::Rgba8Pixel> buf(
+                        w, h,
+                        reinterpret_cast<const slint::Rgba8Pixel *>(rgba.data()));
+                    (*u)->set_map_frame(slint::Image(buf));
+                });
+        });
+    ui->set_map_available(true);
+    map_hook->push(*model); // initial frame
+#endif
+    ui->on_map_zoom([model, map_hook](int delta) {
+        map_hook->zoom = std::clamp(map_hook->zoom + delta, 3.0, 19.0);
+#ifdef CYCLOMP_HAVE_MAPLIBRE
+        if (map_hook->service)
+            map_hook->service->set_camera(model->lat, model->lon, map_hook->zoom);
+#endif
+    });
 
     // idle -> start (fresh session) | running -> pause | paused -> resume
     ui->on_toggle_ride([ui = slint::ComponentWeakHandle(ui), model] {
@@ -209,13 +307,14 @@ int main(int, char **)
     // ~500 ms telemetry tick; only advances while RUNNING (pause freezes all).
     static slint::Timer timer;
     timer.start(slint::TimerMode::Repeated, std::chrono::milliseconds(500),
-        [ui = slint::ComponentWeakHandle(ui), model] {
+        [ui = slint::ComponentWeakHandle(ui), model, map_hook] {
             auto u = ui.lock();
             if (!u) return;
             auto &w = **u;
             if (w.get_ride_state() != Running) return;
             model->tick(0.5f);
             publish_live(w, *model);
+            map_hook->push(*model);
         });
 
     ui->run();
