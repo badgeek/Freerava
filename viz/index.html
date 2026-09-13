@@ -566,6 +566,49 @@ function loadMapLibre() {
   return _mlPromise;
 }
 
+// A pared-back basemap: start from OpenFreeMap "positron" (already the
+// minimal OpenMapTiles style), drop every symbol layer — at specimen scale
+// labels and POI icons are just noise — and retint what's left to a quiet
+// paper palette so the route is the only thing with colour.
+const MINI = {
+  paper:  '#f7f7f5',  // background / land
+  water:  '#dde6ea',
+  green:  '#eef1ea',  // parks, woods
+  build:  '#ededea',
+  road:   '#ffffff',  // road fill
+  casing: '#e3e3df',  // road outline, minor roads
+  rail:   '#e8e8e4',
+  admin:  '#dcdcd7',
+};
+async function minimalStyle() {
+  const style = await (await fetch('https://tiles.openfreemap.org/styles/positron')).json();
+  style.layers = style.layers.filter(l => l.type !== 'symbol').map(l => {
+    const sl = l['source-layer'] || '', id = l.id, p = { ...(l.paint || {}) };
+    const isCasing = /casing|outline/.test(id);
+    if (l.type === 'background') p['background-color'] = MINI.paper;
+    else if (l.type === 'fill') {
+      delete p['fill-outline-color']; // undefined would fail style validation
+      if (sl === 'water') p['fill-color'] = MINI.water;
+      else if (sl === 'building') p['fill-color'] = MINI.build;
+      else if (sl === 'park' || sl === 'landcover') p['fill-color'] = MINI.green;
+      else if (sl === 'landuse') p['fill-color'] = MINI.paper;
+      else p['fill-color'] = MINI.paper;
+      p['fill-opacity'] = 1;
+    } else if (l.type === 'line') {
+      if (sl === 'waterway') p['line-color'] = MINI.water;
+      else if (sl === 'boundary') { p['line-color'] = MINI.admin; p['line-opacity'] = 0.6; }
+      else if (/railway/.test(id)) { p['line-color'] = MINI.rail; p['line-opacity'] = 0.8; }
+      else if (sl === 'transportation' || sl === 'aeroway')
+        p['line-color'] = isCasing || /minor|path|subtle/.test(id) ? MINI.casing : MINI.road;
+      else p['line-color'] = MINI.casing;
+      // Flat, unmodulated strokes read cleaner than the stock opacity ramps.
+      if (p['line-opacity'] === undefined) p['line-opacity'] = 1;
+    }
+    return { ...l, paint: p };
+  });
+  return style;
+}
+
 let _mlMap = null, _mlDiv = null, _mlQueue = Promise.resolve();
 async function mlReady() {
   await loadMapLibre();
@@ -575,7 +618,7 @@ async function mlReady() {
   document.body.appendChild(_mlDiv);
   _mlMap = new maplibregl.Map({
     container: _mlDiv,
-    style: 'https://tiles.openfreemap.org/styles/liberty',
+    style: await minimalStyle(),
     interactive: false, attributionControl: false,
     preserveDrawingBuffer: true, fadeDuration: 0, antialias: true,
   });
@@ -606,7 +649,7 @@ function mlRender(lonW, latS, lonE, latN, maxPx = 2048) {
     const out = document.createElement('canvas');
     out.width = src.width; out.height = src.height;
     const ctx = out.getContext('2d');
-    ctx.filter = 'saturate(1.06) contrast(1.03)';
+    ctx.filter = 'saturate(1.02) contrast(1.01)';
     ctx.drawImage(src, 0, 0);
     const kx = Math.cos(((latS + latN) / 2) * Math.PI / 180) * 111320;
     out._mpp = (lonE - lonW) * kx / out.width; // metres per output pixel
