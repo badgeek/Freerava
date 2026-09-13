@@ -201,13 +201,18 @@ int main(int, char **)
     }
 #endif
 
+    // While a ride replay runs, the replay owns the map marker; the live
+    // rider position must not overwrite it.
+    auto replay_active = std::make_shared<std::atomic<bool>>(false);
+
     // Hand the rider's position to the map and read back where the map
     // thread projected it. Desktop keeps the built-in centre defaults.
     std::function<void(AppWindow &)> publish_marker = [](AppWindow &) {};
 #if defined(CYCLOMP_MAP_GL)
-    publish_marker = [current_position](AppWindow &w) {
+    publish_marker = [current_position, replay_active](AppWindow &w) {
         double la, lo;
-        if (current_position(la, lo)) mapgl::set_marker(la, lo);
+        if (!replay_active->load() && current_position(la, lo))
+            mapgl::set_marker(la, lo);
         double nx, ny, aspect;
         if (mapgl::marker_offset(nx, ny, aspect)) {
             w.set_marker_nx((float)nx);
@@ -230,15 +235,11 @@ int main(int, char **)
     for (const auto &s : log->newest_first()) sessions->push_back(to_row(s));
     ui->set_sessions(sessions);
 
-    // Tap on a history row: toggle selection + build its infographics.
+    // Tap on a history row: open the ride-detail page (screen 3).
     ui->on_select_session([ui = slint::ComponentWeakHandle(ui), log](int i) {
         auto u = ui.lock();
         if (!u) return;
         auto &w = **u;
-        if (w.get_selected_session() == i) {
-            w.set_selected_session(-1);
-            return;
-        }
         const auto &rows = log->newest_first();
         if (i < 0 || (size_t)i >= rows.size()) return;
         w.set_sel_speed_path(
@@ -246,6 +247,154 @@ int main(int, char **)
         w.set_sel_track_path(
             slint::SharedString(core::track_shape_path(rows[i].track, 300, 120)));
         w.set_selected_session(i);
+        w.set_detail_tab(0);
+        w.set_replay_playing(false);
+        w.set_replay_progress(0.f);
+        w.set_screen(3);
+    });
+
+    // ---- Ride replay (detail page, MAP tab) ----
+    struct Replay {
+        std::vector<core::TrackPoint> trk;
+        double t = 0, total = 0;
+        int speedIdx = 1; // 10x / 30x / 60x
+    };
+    static constexpr int kReplaySpeeds[3] = {10, 30, 60};
+    auto rp = std::make_shared<Replay>();
+    static slint::Timer replay_timer;
+
+    auto replay_tick = [ui = slint::ComponentWeakHandle(ui), rp,
+                        replay_active] {
+        auto u = ui.lock();
+        if (!u) return;
+        auto &w = **u;
+        const auto &T = rp->trk;
+        if (T.size() < 2 || rp->total <= 0) return;
+        rp->t = std::min(rp->t + 0.1 * kReplaySpeeds[rp->speedIdx], rp->total);
+        size_t j = 1;
+        while (j < T.size() && T[j].t_s < rp->t) ++j;
+        double lat, lon;
+        if (j >= T.size()) {
+            lat = T.back().lat;
+            lon = T.back().lon;
+        } else {
+            const auto &a = T[j - 1];
+            const auto &b = T[j];
+            double f = std::clamp(
+                (rp->t - a.t_s) / std::max(1e-6, (double)(b.t_s - a.t_s)),
+                0.0, 1.0);
+            lat = a.lat + f * (b.lat - a.lat);
+            lon = a.lon + f * (b.lon - a.lon);
+        }
+#if defined(CYCLOMP_MAP_GL)
+        mapgl::set_marker(lat, lon);
+        double nx, ny, aspect;
+        if (mapgl::marker_offset(nx, ny, aspect)) {
+            w.set_marker_nx((float)nx);
+            w.set_marker_ny((float)ny);
+            w.set_frame_aspect((float)aspect);
+            w.set_marker_valid(true);
+        }
+#else
+        (void)lat;
+        (void)lon;
+#endif
+        w.set_replay_progress((float)(rp->t / rp->total));
+        if (rp->t >= rp->total) {
+            replay_timer.stop();
+            replay_active->store(false);
+            w.set_replay_playing(false);
+        }
+    };
+
+    // MAP tab opened: show this ride's line, fit the camera, park the
+    // marker at the start.
+    ui->on_detail_map_shown([ui = slint::ComponentWeakHandle(ui), log, rp,
+                             replay_active] {
+        auto u = ui.lock();
+        if (!u) return;
+        auto &w = **u;
+        replay_timer.stop();
+        replay_active->store(false);
+        w.set_replay_playing(false);
+        w.set_replay_progress(0.f);
+        int i = w.get_selected_session();
+        const auto &rows = log->newest_first();
+        if (i < 0 || (size_t)i >= rows.size()) return;
+        rp->trk = rows[i].track;
+        rp->total = rp->trk.empty() ? 0.0 : (double)rp->trk.back().t_s;
+        rp->t = 0;
+#if defined(CYCLOMP_MAP_GL)
+        if (rp->trk.size() >= 2) {
+            std::vector<std::pair<double, double>> pts;
+            pts.reserve(rp->trk.size());
+            double lat0 = rp->trk[0].lat, lat1 = lat0;
+            double lon0 = rp->trk[0].lon, lon1 = lon0;
+            for (const auto &p : rp->trk) {
+                pts.emplace_back(p.lat, p.lon);
+                lat0 = std::min(lat0, p.lat);
+                lat1 = std::max(lat1, p.lat);
+                lon0 = std::min(lon0, p.lon);
+                lon1 = std::max(lon1, p.lon);
+            }
+            mapgl::set_track(std::move(pts));
+            // Fit: web-mercator zoom from the bbox vs the (logical) view.
+            auto sz = w.window().size();
+            double lw = sz.width / 2.75, lh = sz.height / 2.75;
+            double k = std::cos((lat0 + lat1) / 2.0 * M_PI / 180.0);
+            double zx = std::log2(360.0 / std::max((lon1 - lon0) * k, 1e-4) *
+                                  lw / 512.0);
+            double zy = std::log2(180.0 / std::max(lat1 - lat0, 1e-4) *
+                                  lh / 512.0);
+            double z = std::clamp(std::min(zx, zy) - 0.4, 3.0, 19.0);
+            mapgl::set_camera((lat0 + lat1) / 2.0, (lon0 + lon1) / 2.0, z);
+            mapgl::set_marker(rp->trk.front().lat, rp->trk.front().lon);
+        }
+#endif
+    });
+
+    ui->on_replay_toggle([ui = slint::ComponentWeakHandle(ui), rp,
+                          replay_active, replay_tick] {
+        auto u = ui.lock();
+        if (!u) return;
+        auto &w = **u;
+        if (replay_active->load()) {
+            replay_timer.stop();
+            replay_active->store(false);
+            w.set_replay_playing(false);
+            return;
+        }
+        if (rp->trk.size() < 2 || rp->total <= 0) return;
+        if (rp->t >= rp->total) rp->t = 0;
+        replay_active->store(true);
+        w.set_replay_playing(true);
+        replay_timer.start(slint::TimerMode::Repeated,
+                           std::chrono::milliseconds(100), replay_tick);
+    });
+
+    ui->on_replay_speed_cycle([ui = slint::ComponentWeakHandle(ui), rp] {
+        rp->speedIdx = (rp->speedIdx + 1) % 3;
+        if (auto u = ui.lock())
+            (*u)->set_replay_speed_label(slint::SharedString(
+                std::to_string(kReplaySpeeds[rp->speedIdx]) + "×"));
+    });
+
+    // Leave the detail page: stop the replay, hand the marker back to the
+    // live rider.
+    ui->on_detail_back([ui = slint::ComponentWeakHandle(ui), replay_active,
+                        current_position] {
+        auto u = ui.lock();
+        if (!u) return;
+        replay_timer.stop();
+        replay_active->store(false);
+        (*u)->set_replay_playing(false);
+        (*u)->set_screen(2);
+#if defined(CYCLOMP_MAP_GL)
+        double la, lo;
+        if (current_position(la, lo)) mapgl::set_marker(la, lo);
+#else
+        (void)current_position;
+#endif
     });
     publish_idle(*ui, sensors);
     publish_nav(*ui);
