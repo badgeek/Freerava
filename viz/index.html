@@ -893,20 +893,29 @@ async function refreshDetail() {
   if ((crop._zoom || 0) <= g.baseZoom) { killDetail(g); return; } // no gain
 
   // Feather the patch edges to alpha 0 so the sharp overlay dissolves into
-  // the base texture instead of showing a hard mismatched rectangle.
-  const fw = crop.width, fh = crop.height, m = Math.round(Math.min(fw, fh) * 0.12);
-  const fx = crop.getContext('2d');
-  // Punch a soft alpha taper into each border band (centre stays opaque).
-  fx.globalCompositeOperation = 'destination-out';
-  const band = (x, y, w2, h2, gx0, gy0, gx1, gy1) => {
-    const gr = fx.createLinearGradient(gx0, gy0, gx1, gy1);
-    gr.addColorStop(0, 'rgba(0,0,0,1)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
-    fx.fillStyle = gr; fx.fillRect(x, y, w2, h2);
+  // the base texture. Use ONE separable mask f(x)*f(y): overlapping edge
+  // bands double-subtract at the corners and leave blotchy smudges there.
+  const fw = crop.width, fh = crop.height;
+  const mask = document.createElement('canvas');
+  mask.width = 96; mask.height = 96;
+  const mc = mask.getContext('2d');
+  const taper = (horiz) => {
+    const gr = horiz ? mc.createLinearGradient(0, 0, 96, 0)
+                     : mc.createLinearGradient(0, 0, 0, 96);
+    // Opaque core, smooth taper to transparent over the outer ~16% each side.
+    gr.addColorStop(0.00, 'rgba(0,0,0,0)');
+    gr.addColorStop(0.16, 'rgba(0,0,0,1)');
+    gr.addColorStop(0.84, 'rgba(0,0,0,1)');
+    gr.addColorStop(1.00, 'rgba(0,0,0,0)');
+    mc.fillStyle = gr; mc.fillRect(0, 0, 96, 96);
   };
-  band(0, 0, m, fh, 0, 0, m, 0);              // left
-  band(fw - m, 0, m, fh, fw, 0, fw - m, 0);   // right
-  band(0, 0, fw, m, 0, 0, 0, m);              // top
-  band(0, fh - m, fw, m, 0, fh, 0, fh - m);   // bottom
+  taper(true);                                   // f(x)
+  mc.globalCompositeOperation = 'destination-in';
+  taper(false);                                  // * f(y)  (multiplies alpha)
+  const fx = crop.getContext('2d');
+  fx.globalCompositeOperation = 'destination-in';
+  fx.imageSmoothingEnabled = true;
+  fx.drawImage(mask, 0, 0, fw, fh);              // smooth bilinear upscale
   fx.globalCompositeOperation = 'source-over';
 
   const tex = new THREE.CanvasTexture(crop);
