@@ -9,7 +9,9 @@ option(CYCLOMP_BUILD_APP "Build the Slint app target" ON)
 # ---- Platform-free core: ride logic, formatting (no Slint/mbgl/Android) ----
 # Unit-tested below; the OFF app lane proves it never touches Slint.
 add_library(cyclomp_core STATIC
-    src/core/format.cpp)
+    src/core/format.cpp
+    src/core/mock_telemetry.cpp
+    src/core/ride_engine.cpp)
 target_include_directories(cyclomp_core PUBLIC src)
 target_compile_features(cyclomp_core PUBLIC cxx_std_20)
 # Linked into the Android shared lib.
@@ -154,7 +156,9 @@ if(NOT ANDROID)
         FetchContent_MakeAvailable(doctest)
         add_executable(cyclomp_tests
             tests/main.cpp
-            tests/test_format.cpp)
+            tests/test_format.cpp
+            tests/test_ride_engine.cpp
+            tests/test_mock_telemetry.cpp)
         target_link_libraries(cyclomp_tests PRIVATE cyclomp_core doctest::doctest)
         add_test(NAME cyclomp_tests COMMAND cyclomp_tests)
     endif()
