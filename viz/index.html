@@ -3,110 +3,164 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>CYCLOMP // RIDE VISUALISER</title>
+<title>Ride Viewer</title>
 <!--
   Standalone Three.js viewer for a cyclomp ride export. Drag a .geojson
   produced by the app's EXPORT button onto the window (or click to pick one).
-  Route is drawn in 3D, elevation as height, colour by speed (a single-hue
-  phosphor lightness ramp — slow = faded, fast = bright), with a fly-through
-  reveal and a glowing head. No build step; open the file in a browser
+  Clean light theme: the route is drawn in 3D with elevation as height and an
+  "elevation curtain" down to the ground; colour encodes speed on a single-hue
+  orange ramp (slow = light, fast = deep). Fly-through reveal, chase cam,
+  scrub timeline, stat row. No build step; serve this folder and open it
   (needs internet once for the Three.js CDN).
 -->
 <style>
   :root {
-    --ink: #030503; --panel: #060d07; --line: #1b4527;
-    --dim: #2f7a42; --phos: #4dff70; --amber: #ffb000;
-    --cyan: #23b5aa; --red: #ff3b2f;
+    --bg: #f5f6f8;          /* page + 3D backdrop family */
+    --card: #ffffff;
+    --ink: #242428;         /* primary text */
+    --muted: #6d6d78;       /* secondary text */
+    --faint: #9a9aa5;
+    --border: #e6e6eb;
+    --accent: #fc5200;      /* primary action / brand */
+    --accent-dark: #d94700;
+    --ramp-lo: #fcd0ae;     /* slow  (single hue, light->dark) */
+    --ramp-hi: #8f2d00;     /* fast */
+    --start: #16a34a;
+    --finish: #dc2626;
+    --shadow: 0 1px 3px rgba(20,20,30,.08), 0 4px 16px rgba(20,20,30,.08);
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; background: var(--ink); overflow: hidden;
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: var(--phos); }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+      "Helvetica Neue", Arial, sans-serif; color: var(--ink); }
   #app { position: fixed; inset: 0; }
   canvas { display: block; }
 
-  .hud { position: fixed; pointer-events: none; text-transform: uppercase;
-    letter-spacing: 2px; }
-  #title { top: 18px; left: 20px; font-size: 15px; font-weight: 900; }
-  #title .sub { color: var(--dim); font-size: 10px; letter-spacing: 3px; }
+  /* ---- Header: brand + ride title + stat row ---- */
+  header { position: fixed; top: 0; left: 0; right: 0; background: var(--card);
+    border-bottom: 1px solid var(--border); z-index: 3; }
+  .head-inner { max-width: 1080px; margin: 0 auto; padding: 14px 24px 0; }
+  .brand { display: flex; align-items: baseline; gap: 10px; }
+  .brand .mark { width: 14px; height: 14px; border-radius: 3px;
+    background: var(--accent); align-self: center; }
+  .brand h1 { font-size: 17px; font-weight: 700; margin: 0; letter-spacing: -.01em; }
+  .brand .date { color: var(--muted); font-size: 13px; }
+  #stats { display: flex; flex-wrap: wrap; gap: 0 36px; padding: 10px 0 14px; }
+  .stat { min-width: 88px; }
+  .stat .v { font-size: 26px; font-weight: 600; letter-spacing: -.02em;
+    font-variant-numeric: tabular-nums; line-height: 1.15; }
+  .stat .v small { font-size: 13px; font-weight: 500; color: var(--muted); margin-left: 2px; }
+  .stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .06em; margin-top: 1px; }
 
-  /* Stat tiles */
-  #stats { top: 60px; left: 20px; display: grid; grid-template-columns: repeat(3, 96px);
-    gap: 8px; }
-  .tile { background: rgba(6,13,7,.72); border: 1px solid var(--line); padding: 8px 10px; }
-  .tile .k { color: var(--dim); font-size: 9px; letter-spacing: 2px; }
-  .tile .v { font-size: 22px; font-weight: 900; line-height: 1.05; }
-  .tile .u { color: var(--dim); font-size: 9px; }
-  .tile.amber .v { color: var(--amber); } .tile.cyan .v { color: var(--cyan); }
-  .tile.red .v { color: var(--red); }
+  /* ---- Legend ---- */
+  #legend { position: fixed; left: 24px; bottom: 104px; background: var(--card);
+    border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow);
+    padding: 10px 14px; width: 200px; z-index: 3; }
+  #legend .cap { font-size: 11px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .06em; margin-bottom: 6px; }
+  #legend .bar { height: 8px; border-radius: 4px;
+    background: linear-gradient(90deg, var(--ramp-lo), var(--accent), var(--ramp-hi)); }
+  #legend .row { display: flex; justify-content: space-between; color: var(--muted);
+    font-size: 11px; margin-top: 4px; font-variant-numeric: tabular-nums; }
 
-  /* Speed legend */
-  #legend { bottom: 92px; left: 20px; width: 220px; }
-  #legend .bar { height: 10px; border: 1px solid var(--line);
-    background: linear-gradient(90deg, #2f7a42, #4dff70, #d8ffe4); }
-  #legend .row { display: flex; justify-content: space-between; color: var(--dim);
-    font-size: 9px; letter-spacing: 1px; margin-top: 4px; }
+  /* ---- Transport bar ---- */
+  #transport { position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: 24px; width: min(720px, calc(100% - 48px));
+    display: flex; align-items: center; gap: 14px;
+    background: var(--card); border: 1px solid var(--border); border-radius: 999px;
+    box-shadow: var(--shadow); padding: 10px 18px 10px 10px; z-index: 3; }
+  #play { width: 44px; height: 44px; border-radius: 50%; border: none;
+    background: var(--accent); color: #fff; font-size: 15px; cursor: pointer;
+    display: grid; place-items: center; flex: none; transition: background .15s; }
+  #play:hover { background: var(--accent-dark); }
+  #scrub { flex: 1; accent-color: var(--accent); height: 4px; cursor: pointer; }
+  #clock { color: var(--ink); font-size: 14px; font-weight: 600; min-width: 52px;
+    text-align: right; font-variant-numeric: tabular-nums; }
+  .pill { font: inherit; font-size: 12.5px; font-weight: 600; color: var(--muted);
+    background: transparent; border: 1px solid var(--border); border-radius: 999px;
+    padding: 7px 13px; cursor: pointer; white-space: nowrap; transition: all .15s; }
+  .pill:hover { border-color: var(--faint); color: var(--ink); }
+  .pill.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .ctl { display: flex; align-items: center; gap: 7px; color: var(--muted);
+    font-size: 11.5px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .05em; white-space: nowrap; }
+  .ctl input[type=range] { width: 80px; accent-color: var(--accent); }
 
-  /* Transport controls */
-  #transport { position: fixed; left: 20px; right: 20px; bottom: 24px;
-    display: flex; align-items: center; gap: 12px; pointer-events: auto; }
-  button { font: inherit; text-transform: uppercase; letter-spacing: 2px;
-    font-weight: 900; font-size: 12px; color: var(--phos); background: transparent;
-    border: 1px solid var(--phos); padding: 8px 12px; cursor: pointer; }
-  button:hover { background: var(--phos); color: var(--ink); }
-  button.off { color: var(--dim); border-color: var(--line); }
-  #scrub { flex: 1; accent-color: var(--phos); height: 4px; }
-  #clock { color: var(--amber); font-size: 13px; font-weight: 900; min-width: 62px;
-    text-align: right; }
-  .ctl { display: flex; align-items: center; gap: 6px; color: var(--dim);
-    font-size: 10px; letter-spacing: 1px; }
-  .ctl input[type=range] { width: 90px; accent-color: var(--cyan); }
-
-  /* Drop / empty state */
+  /* ---- Drop / empty state ---- */
   #drop { position: fixed; inset: 0; display: flex; align-items: center;
-    justify-content: center; flex-direction: column; gap: 14px; text-align: center;
-    background: rgba(3,5,3,.86); z-index: 5; cursor: pointer; }
+    justify-content: center; background: rgba(245,246,248,.94); z-index: 5;
+    cursor: pointer; }
   #drop.hide { display: none; }
-  #drop .big { font-size: 22px; font-weight: 900; letter-spacing: 3px; }
-  #drop .small { color: var(--dim); font-size: 11px; letter-spacing: 2px; max-width: 420px; }
-  #drop .frame { border: 1px dashed var(--line); padding: 40px 54px; }
-  body.dragging #drop { background: rgba(6,13,7,.94); }
-  body.dragging #drop .frame { border-color: var(--phos); }
-  #err { color: var(--red); font-size: 11px; min-height: 14px; }
+  #drop .box { background: var(--card); border: 1px solid var(--border);
+    border-radius: 16px; box-shadow: var(--shadow); padding: 44px 56px;
+    text-align: center; max-width: 460px; }
+  #drop .well { border: 2px dashed var(--border); border-radius: 12px;
+    padding: 32px 28px; transition: border-color .15s, background .15s; }
+  body.dragging #drop .well { border-color: var(--accent); background: #fff7f2; }
+  #drop svg { width: 44px; height: 44px; stroke: var(--accent); margin-bottom: 10px; }
+  #drop .big { font-size: 19px; font-weight: 700; letter-spacing: -.01em; }
+  #drop .small { color: var(--muted); font-size: 13.5px; line-height: 1.55;
+    margin-top: 8px; }
+  #drop .small code { background: var(--bg); border: 1px solid var(--border);
+    border-radius: 5px; padding: 1px 6px; font-size: 12px; }
+  #err { color: var(--finish); font-size: 13px; min-height: 18px; margin-top: 10px;
+    font-weight: 500; }
+
+  /* ---- Hint chip ---- */
+  #hint { position: fixed; right: 24px; bottom: 104px; background: var(--card);
+    border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow);
+    color: var(--muted); font-size: 11.5px; padding: 8px 12px; z-index: 3; }
 </style>
 </head>
 <body>
 <div id="app"></div>
 
-<div id="title" class="hud">CYCLOMP // RIDE VISUALISER<div class="sub" id="date">— NO RIDE LOADED —</div></div>
-<div id="stats" class="hud" style="display:none">
-  <div class="tile"><div class="k">DIST</div><div class="v" id="s-dist">0.0</div><div class="u">KM</div></div>
-  <div class="tile amber"><div class="k">TIME</div><div class="v" id="s-time">00:00</div><div class="u">MM:SS</div></div>
-  <div class="tile"><div class="k">AVG</div><div class="v" id="s-avg">0</div><div class="u">KM/H</div></div>
-  <div class="tile amber"><div class="k">MAX</div><div class="v" id="s-max">0</div><div class="u">KM/H</div></div>
-  <div class="tile"><div class="k">CLIMB</div><div class="v" id="s-elev">0</div><div class="u">M</div></div>
-  <div class="tile red"><div class="k">AVG HR</div><div class="v" id="s-hr">--</div><div class="u">BPM</div></div>
+<header style="display:none" id="header">
+  <div class="head-inner">
+    <div class="brand">
+      <span class="mark"></span>
+      <h1>Ride Viewer</h1>
+      <span class="date" id="date"></span>
+    </div>
+    <div id="stats">
+      <div class="stat"><div class="v"><span id="s-dist">0.0</span><small>km</small></div><div class="k">Distance</div></div>
+      <div class="stat"><div class="v"><span id="s-time">0:00</span></div><div class="k">Moving Time</div></div>
+      <div class="stat"><div class="v"><span id="s-avg">0</span><small>km/h</small></div><div class="k">Avg Speed</div></div>
+      <div class="stat"><div class="v"><span id="s-max">0</span><small>km/h</small></div><div class="k">Max Speed</div></div>
+      <div class="stat"><div class="v"><span id="s-elev">0</span><small>m</small></div><div class="k">Elev Gain</div></div>
+      <div class="stat"><div class="v"><span id="s-hr">--</span><small>bpm</small></div><div class="k">Avg HR</div></div>
+    </div>
+  </div>
+</header>
+
+<div id="legend" style="display:none">
+  <div class="cap">Speed</div>
+  <div class="bar"></div>
+  <div class="row"><span id="lg-min">0</span><span>km/h</span><span id="lg-max">0</span></div>
 </div>
 
-<div id="legend" class="hud" style="display:none">
-  <div style="color:var(--dim);font-size:9px;letter-spacing:2px;margin-bottom:4px">SPEED</div>
-  <div class="bar"></div>
-  <div class="row"><span id="lg-min">0</span><span>KM/H</span><span id="lg-max">0</span></div>
-</div>
+<div id="hint" style="display:none">Drag to orbit &nbsp;·&nbsp; scroll to zoom</div>
 
 <div id="transport" style="display:none">
-  <button id="play">► PLAY</button>
+  <button id="play" aria-label="Play">&#9654;</button>
   <input id="scrub" type="range" min="0" max="1000" value="1000" />
-  <span id="clock">00:00</span>
-  <button id="follow" class="off">CHASE CAM</button>
-  <span class="ctl">RELIEF <input id="exag" type="range" min="0" max="40" value="12" /></span>
+  <span id="clock">0:00</span>
+  <button id="follow" class="pill">Chase cam</button>
+  <span class="ctl">Relief <input id="exag" type="range" min="0" max="40" value="12" /></span>
 </div>
 
 <div id="drop">
-  <div class="frame">
-    <div class="big">DROP RIDE .GEOJSON</div>
-    <div class="small">Export a ride from cyclomp (LOG → open a ride → EXPORT), then drop the
-      file here or click to choose it.</div>
-    <div id="err"></div>
+  <div class="box">
+    <div class="well">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 16V4m0 0 4 4m-4-4-4 4"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/>
+      </svg>
+      <div class="big">Upload your ride</div>
+      <div class="small">Drop the <code>.geojson</code> here, or click to browse.<br/>
+        Export one from cyclomp: <strong>Log&nbsp;→ open a ride&nbsp;→ Export</strong>.</div>
+      <div id="err"></div>
+    </div>
   </div>
   <input id="file" type="file" accept=".geojson,.json,application/geo+json" style="display:none" />
 </div>
@@ -125,8 +179,11 @@ import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 
-const COL = { ink:0x030503, dim:0x2f7a42, phos:0x4dff70, amber:0xffb000,
-              red:0xff3b2f, line:0x1b4527, hot:0xd8ffe4 };
+const COL = {
+  bg: 0xeef0f3, grid: 0xd7dce2, grid2: 0xe4e8ed,
+  rampLo: 0xfcd0ae, accent: 0xfc5200, rampHi: 0x8f2d00,
+  start: 0x16a34a, finish: 0xdc2626, white: 0xffffff,
+};
 
 // ---- scene ----
 const app = document.getElementById('app');
@@ -135,8 +192,8 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 app.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(COL.ink);
-scene.fog = new THREE.Fog(COL.ink, 300, 2600);
+scene.background = new THREE.Color(COL.bg);
+scene.fog = new THREE.Fog(COL.bg, 500, 3200);
 
 const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 20000);
 camera.position.set(300, 320, 480);
@@ -144,30 +201,33 @@ camera.position.set(300, 320, 480);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
+controls.maxPolarAngle = Math.PI * 0.495; // stay above the ground
 
-scene.add(new THREE.AmbientLight(0x88ffaa, 0.5));
-const headLight = new THREE.PointLight(COL.phos, 2.4, 900, 2);
-scene.add(headLight);
-
-// Nostromo grid + faint ground.
-const grid = new THREE.GridHelper(4000, 80, COL.line, 0x0e2417);
-grid.material.transparent = true; grid.material.opacity = 0.55;
+// Ground grid (all materials are unlit, so no lights needed).
+const grid = new THREE.GridHelper(4000, 80, COL.grid, COL.grid2);
+grid.material.transparent = true; grid.material.opacity = 0.9;
 scene.add(grid);
 
 // ---- ride state ----
-let ride = null;         // { P:[Vec3], cumT:[], cumD:[], vNorm:[], colors:Float32,
-                         //   route:Line2, head, startDot, endDot, total, tMin,tMax, box }
+let ride = null;
 let playing = false, headT = 1, follow = false, exag = 12;
 
+function disposeObj(o) {
+  if (!o) return;
+  scene.remove(o);
+  o.geometry?.dispose?.(); o.material?.dispose?.();
+  o.children?.slice().forEach(disposeObj);
+}
 function clearRide() {
   if (!ride) return;
-  for (const o of [ride.route, ride.head, ride.startDot, ride.endDot, ride.glow])
-    if (o) { scene.remove(o); o.geometry?.dispose?.(); o.material?.dispose?.(); }
+  for (const o of [ride.route, ride.curtain, ride.head, ride.startDot, ride.endDot])
+    disposeObj(o);
   ride = null;
 }
 
-// Single-hue phosphor lightness ramp: slow = faded green, fast = bright/white.
-const c1 = new THREE.Color(COL.dim), c2 = new THREE.Color(COL.phos), c3 = new THREE.Color(COL.hot);
+// Single-hue orange ramp: slow = light, fast = deep.
+const c1 = new THREE.Color(COL.rampLo), c2 = new THREE.Color(COL.accent),
+      c3 = new THREE.Color(COL.rampHi);
 function speedColor(v, out) {
   if (v < 0.5) out.copy(c1).lerp(c2, v / 0.5);
   else out.copy(c2).lerp(c3, (v - 0.5) / 0.5);
@@ -186,6 +246,18 @@ function project(coords) {
     (c[0] - lon0) * kx, ((c[2] ?? 0) - altMin), -(c[1] - lat0) * kz));
 }
 
+// A flat marker: coloured dot with a white ring, like a map pin seen in 3D.
+function makeDot(color, r) {
+  const g = new THREE.Group();
+  const ring = new THREE.Mesh(new THREE.SphereGeometry(r * 1.45, 20, 16),
+    new THREE.MeshBasicMaterial({ color: COL.white }));
+  const dot = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 16),
+    new THREE.MeshBasicMaterial({ color }));
+  g.add(ring); g.add(dot);
+  scene.add(g);
+  return g;
+}
+
 function buildRide(gj) {
   clearRide();
   const feat = (gj.features || []).find(f => f.geometry?.type === 'LineString');
@@ -199,30 +271,18 @@ function buildRide(gj) {
   const vMax = Math.max(1e-3, ...speed), vMin = Math.min(...speed);
   const vNorm = speed.map(s => (s - vMin) / Math.max(1e-3, vMax - vMin));
 
-  // Cumulative distance (for the head) and the elevation-applied points.
-  const cumD = [0];
-  for (let i = 1; i < P.length; i++) cumD.push(cumD[i - 1] + P[i].distanceTo(P[i - 1]));
-
-  const g = { P, speed, tArr, vNorm, vMin, vMax, cumD,
+  const g = { P, speed, tArr, vNorm, vMin, vMax,
               tMin: tArr[0], tMax: tArr[tArr.length - 1],
               summary: gj.properties || {} };
   ride = g;
 
   rebuildGeometry(); // positions depend on the relief slider
 
-  // Start (green) + end (amber) markers, head glow.
-  const dot = (color, r) => {
-    const m = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 16),
-      new THREE.MeshBasicMaterial({ color }));
-    scene.add(m); return m;
-  };
-  g.startDot = dot(COL.phos, 6);
-  g.endDot = dot(COL.amber, 6);
-  g.head = dot(COL.hot, 5);
-  const glow = new THREE.Sprite(new THREE.SpriteMaterial({
-    color: COL.phos, transparent: true, opacity: 0.5, depthWrite: false,
-    blending: THREE.AdditiveBlending }));
-  glow.scale.set(46, 46, 1); scene.add(glow); g.glow = glow;
+  g.startDot = makeDot(COL.start, 5);
+  g.endDot = makeDot(COL.finish, 5);
+  g.head = makeDot(COL.accent, 5.5);
+  g.startDot.position.copy(g.drawn[0]);
+  g.endDot.position.copy(g.drawn[g.drawn.length - 1]);
 
   frameCamera();
   headT = 1; setProgress(1);
@@ -234,6 +294,7 @@ function rebuildGeometry() {
   const pts = g.P.map(p => new THREE.Vector3(p.x, p.y * exag, p.z));
   g.drawn = pts;
 
+  // Route line, per-vertex speed colour.
   const pos = new Float32Array(pts.length * 3);
   const col = new Float32Array(pts.length * 3);
   const tmp = new THREE.Color();
@@ -244,13 +305,39 @@ function rebuildGeometry() {
   }
   const geo = new LineGeometry();
   geo.setPositions(pos); geo.setColors(col);
-  if (g.route) { scene.remove(g.route); g.route.geometry.dispose(); }
-  const mat = new LineMaterial({ vertexColors: true, linewidth: 4.5,
-    worldUnits: false, dashed: false, transparent: true });
+  disposeObj(g.route);
+  const mat = new LineMaterial({ vertexColors: true, linewidth: 5,
+    worldUnits: false, transparent: true });
   mat.resolution.set(innerWidth, innerHeight);
   const line = new Line2(geo, mat);
   line.computeLineDistances();
   scene.add(line); g.route = line; g.mat = mat; g.segCount = pts.length - 1;
+
+  // Elevation curtain: a translucent wall from the route down to the ground,
+  // tinted by the same ramp — gives the flyover its sense of relief.
+  const n = pts.length;
+  const cPos = new Float32Array(n * 2 * 3);
+  const cCol = new Float32Array(n * 2 * 3);
+  for (let i = 0; i < n; i++) {
+    const p = pts[i];
+    cPos.set([p.x, p.y, p.z, p.x, 0, p.z], i * 6);
+    speedColor(g.vNorm[i], tmp);
+    cCol.set([tmp.r, tmp.g, tmp.b, tmp.r, tmp.g, tmp.b], i * 6);
+  }
+  const idx = [];
+  for (let i = 0; i < n - 1; i++) {
+    const a = i * 2, b = a + 1, c = a + 2, d = a + 3;
+    idx.push(a, b, c, b, d, c);
+  }
+  const cg = new THREE.BufferGeometry();
+  cg.setAttribute('position', new THREE.BufferAttribute(cPos, 3));
+  cg.setAttribute('color', new THREE.BufferAttribute(cCol, 3));
+  cg.setIndex(idx);
+  disposeObj(g.curtain);
+  const curtain = new THREE.Mesh(cg, new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.14,
+    side: THREE.DoubleSide, depthWrite: false }));
+  scene.add(curtain); g.curtain = curtain;
 
   if (g.startDot) g.startDot.position.copy(pts[0]);
   if (g.endDot) g.endDot.position.copy(pts[pts.length - 1]);
@@ -267,25 +354,27 @@ function frameCamera() {
   camera.near = d / 200; camera.far = d * 40; camera.updateProjectionMatrix();
 }
 
-// Position along the reveal, driven by time fraction 0..1.
+// Reveal + head position, driven by time fraction 0..1.
 function setProgress(frac) {
   const g = ride; if (!g) return;
   headT = Math.min(1, Math.max(0, frac));
-  // Segment revealed count (draw-on flyover).
   const seg = Math.max(1, Math.round(g.segCount * headT));
   g.route.geometry.instanceCount = seg;
+  if (g.curtain) g.curtain.geometry.setDrawRange(0, seg * 6);
 
-  // Head position by time (t_s), so pauses read naturally.
   const t = g.tMin + (g.tMax - g.tMin) * headT;
+  document.getElementById('scrub').value = String(Math.round(headT * 1000));
+  document.getElementById('clock').textContent = mmss(t);
+
+  // Head marker exists only after the first full build.
+  if (!g.head) return;
   let i = 1; while (i < g.tArr.length && g.tArr[i] < t) i++;
   const a = g.drawn[i - 1], b = g.drawn[Math.min(i, g.drawn.length - 1)];
   const ta = g.tArr[i - 1], tb = g.tArr[Math.min(i, g.tArr.length - 1)];
   const f = tb > ta ? (t - ta) / (tb - ta) : 0;
   const hp = a.clone().lerp(b, f);
-  g.head.position.copy(hp); g.glow.position.copy(hp); headLight.position.copy(hp);
+  g.head.position.copy(hp);
 
-  document.getElementById('scrub').value = String(Math.round(headT * 1000));
-  document.getElementById('clock').textContent = mmss(t);
   if (follow) {
     const off = new THREE.Vector3(80, 120, 140);
     controls.target.lerp(hp, 0.12);
@@ -295,16 +384,17 @@ function setProgress(frac) {
 
 function mmss(s) {
   s = Math.max(0, Math.round(s));
-  return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+  return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
 }
 
 function showChrome(sum, vMin, vMax) {
-  document.getElementById('stats').style.display = 'grid';
+  document.getElementById('header').style.display = 'block';
   document.getElementById('legend').style.display = 'block';
   document.getElementById('transport').style.display = 'flex';
+  document.getElementById('hint').style.display = 'block';
   const d = sum.ended_at ? new Date(sum.ended_at * 1000) : null;
   document.getElementById('date').textContent = d
-    ? 'SORTIE // ' + d.toISOString().slice(0, 16).replace('T', ' ') : 'RIDE LOADED';
+    ? d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '';
   const set = (id, v) => document.getElementById(id).textContent = v;
   set('s-dist', (sum.dist_km ?? 0).toFixed(1));
   set('s-time', mmss(sum.moving_s ?? 0));
@@ -316,7 +406,8 @@ function showChrome(sum, vMin, vMax) {
 }
 
 function climb(P) { // positive vertical steps (raw metres, pre-exaggeration)
-  let g = 0; for (let i = 1; i < P.length; i++) { const d = P[i].y - P[i - 1].y; if (d > 0.3) g += d; }
+  let g = 0;
+  for (let i = 1; i < P.length; i++) { const d = P[i].y - P[i - 1].y; if (d > 0.3) g += d; }
   return g;
 }
 
@@ -326,9 +417,9 @@ function loadText(txt) {
   try {
     buildRide(JSON.parse(txt));
     document.getElementById('drop').classList.add('hide');
-    playing = true; document.getElementById('play').textContent = '❚❚ PAUSE';
+    playing = true; setPlayIcon();
   } catch (e) {
-    document.getElementById('err').textContent = 'COULD NOT READ: ' + e.message;
+    document.getElementById('err').textContent = 'Could not read the file: ' + e.message;
   }
 }
 function loadFile(file) {
@@ -348,22 +439,24 @@ addEventListener('drop', e => {
   const f = e.dataTransfer.files[0]; if (f) loadFile(f);
 });
 
+function setPlayIcon() {
+  document.getElementById('play').innerHTML = playing ? '&#10074;&#10074;' : '&#9654;';
+}
 document.getElementById('play').addEventListener('click', () => {
   if (!ride) return;
-  if (headT >= 1) headT = 0;        // replay from the start
-  playing = !playing;
-  document.getElementById('play').textContent = playing ? '❚❚ PAUSE' : '► PLAY';
+  if (headT >= 1) headT = 0; // replay from the start
+  playing = !playing; setPlayIcon();
 });
 document.getElementById('scrub').addEventListener('input', e => {
-  playing = false; document.getElementById('play').textContent = '► PLAY';
+  playing = false; setPlayIcon();
   setProgress(Number(e.target.value) / 1000);
 });
 document.getElementById('follow').addEventListener('click', e => {
-  follow = !follow; e.target.classList.toggle('off', !follow);
+  follow = !follow; e.target.classList.toggle('on', follow);
   if (!follow && ride) frameCamera();
 });
 document.getElementById('exag').addEventListener('input', e => {
-  exag = Number(e.target.value); if (ride) { rebuildGeometry(); }
+  exag = Number(e.target.value); if (ride) rebuildGeometry();
 });
 
 // ---- loop ----
@@ -374,7 +467,7 @@ function animate(now) {
   if (ride && playing) {
     const dur = Math.max(4, (ride.tMax - ride.tMin) / 6); // ~6x real time, min 4s
     headT += dt / dur;
-    if (headT >= 1) { headT = 1; playing = false; document.getElementById('play').textContent = '► PLAY'; }
+    if (headT >= 1) { headT = 1; playing = false; setPlayIcon(); }
     setProgress(headT);
   }
   controls.update();

@@ -1,9 +1,10 @@
 # cyclomp ride visualiser
 
 A standalone, no-build Three.js viewer for a ride exported from the cyclomp
-app. Route in 3D, elevation as height, colour by speed (a single-hue phosphor
-ramp — slow = faded, fast = bright), with a fly-through reveal, a glowing head,
-chase cam, scrub timeline and stat tiles. Matches the app's Nostromo palette.
+app. Clean, light, Strava-style design: route in 3D with elevation as height
+and a translucent elevation curtain, coloured by speed on a single-hue orange
+ramp (slow = light, fast = deep), fly-through reveal, chase cam, scrub
+timeline, and a stat row (distance / moving time / avg / max / climb / HR).
 
 ## Get a ride file
 
