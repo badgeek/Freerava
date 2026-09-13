@@ -196,6 +196,10 @@ const COL = {
 const app = document.getElementById('app');
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+// r155+ defaults to physical light units, which renders our Lambert-lit
+// map/markers ~30% too dark (the unlit route stays vivid — hence the muddy
+// map next to a bright line). Legacy units make ambient+sun sum literally.
+renderer.useLegacyLights = true;
 app.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -219,8 +223,8 @@ scene.add(grid);
 // the unlit route/curtain/slab-side materials ignore it. Ambient + sun sum
 // to ~1.0 on flat ground so the draped map keeps its true colours (higher
 // totals clip the texture toward white and wash the roads out).
-scene.add(new THREE.AmbientLight(0xffffff, 0.62));
-const sun = new THREE.DirectionalLight(0xffffff, 0.42);
+scene.add(new THREE.AmbientLight(0xffffff, 0.68));
+const sun = new THREE.DirectionalLight(0xffffff, 0.38);
 sun.position.set(300, 600, 200);
 scene.add(sun);
 
