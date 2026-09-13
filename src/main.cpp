@@ -569,6 +569,8 @@ int main(int, char **)
                 on_ride_start();
                 if (mock) mock->reset_ride();
                 recorder->reset();
+                w.set_live_elev_path(slint::SharedString(""));
+                w.set_live_elev_label(slint::SharedString("ELEV +0 m"));
 #if defined(CYCLOMP_MAP_GL)
                 mapgl::set_track({}); // clear the previous ride's line
 #endif
@@ -630,6 +632,17 @@ int main(int, char **)
                     mapgl::set_track(std::move(pts));
                 }
 #endif
+                // Live elevation HUD on the MAP screen (~1 Hz).
+                if (recorder->points().size() % 2 == 0) {
+                    w.set_live_elev_path(
+                        slint::SharedString(core::elevation_profile_path(
+                            recorder->points(), 160, 60)));
+                    w.set_live_elev_label(slint::SharedString(
+                        "ELEV +" +
+                        core::fmt::fmt0(
+                            core::elevation_gain_m(recorder->points())) +
+                        " m"));
+                }
                 if (auto up = camera->on_position(s.lat, s.lon)) cam_sink(*up);
             }
         });
