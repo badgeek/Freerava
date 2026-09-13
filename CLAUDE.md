@@ -120,6 +120,16 @@ Rules that kept this codebase healthy:
   prefer ASCII in UI strings. `clip: true` is OFF by default on Rectangles.
   Gesture pinch = `ScaleRotateGestureHandler` (scale is CUMULATIVE; `ended`
   fires after `scale` resets — cache it in a property).
+- Slint: NEVER change `screen` (or any prop that removes an `if`/`ListView`
+  subtree) synchronously from inside a callback fired by an element in THAT
+  subtree — the tap destroys the element mid-dispatch, then Slint walks the
+  orphaned item's generated `parent_node` (`self->parent.lock().value()`),
+  the parent weak is empty, and it throws `std::bad_optional_access`. Was a
+  device-ONLY crash (emulator event ordering hid it): tapping a SORTIE LOG
+  row ran `select-session` -> `set_screen(3)` -> killed the history ListView
+  under its own click. Fix: defer the switch a turn with
+  `slint::invoke_from_event_loop([ui]{ ...set_screen(3); })` so the click
+  finishes with the list alive (`on_select_session` in main.cpp).
 - `float`-accumulate elapsed time; `lround(0.5)` per 500 ms tick once made
   the clock run 2×. There's a regression test.
 - grep-ing build output for "error" false-positives on `error_sink.cpp.o`.
@@ -133,7 +143,15 @@ Rules that kept this codebase healthy:
   android/build/intermediates/cxx/Debug/*/obj/arm64-v8a/libcyclomp.so <pc>`.
   FIRST verify the Build ID matches (`llvm-readelf -n` vs the crash dump) —
   every gradle build overwrites the lib, so symbolize crashes IMMEDIATELY
-  or the addresses become garbage against the wrong binary.
+  or the addresses become garbage against the wrong binary. CAVEAT: MIUI 10
+  on the Redmi truncates the logcat tombstone at `#01 abort_message` — the
+  real throwing frame never prints, and `/data/tombstones` is root-only. For
+  that, `main.cpp` installs a `std::set_terminate` handler (Android only)
+  that walks `_Unwind_Backtrace` and logs library-relative offsets under tag
+  `cyclomp-crash` (`adb logcat -s cyclomp-crash:F`); feed those offsets
+  straight to `llvm-addr2line -Cfe <unstripped .so>` (they're already the
+  base-relative addresses addr2line wants). This is how the log-detail
+  `bad_optional_access` was finally located in Slint-generated `parent_node`.
 - **App files without root**: `adb shell run-as dev.bauhouse.cyclomp cat
   files/settings.txt` (also sessions.txt). WRITING settings this way is the
   practical replacement for env vars (zygote blocks them): e.g. force the

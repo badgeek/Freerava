@@ -41,7 +41,47 @@
 #include <ctime>
 #include <memory>
 
+#ifdef __ANDROID__
+#include <android/log.h>
+#include <dlfcn.h>
+#include <exception>
+#include <unwind.h>
+#endif
+
 namespace {
+
+#ifdef __ANDROID__
+// Temporary crash triage: dump a library-relative backtrace on terminate so
+// the throwing frame (which MIUI's tombstone truncates at abort_message) is
+// symbolizable with llvm-addr2line against the unstripped libcyclomp.so.
+struct BtState { void **cur; void **end; };
+_Unwind_Reason_Code cyclomp_bt_cb(_Unwind_Context *ctx, void *arg) {
+    auto *st = static_cast<BtState *>(arg);
+    uintptr_t pc = _Unwind_GetIP(ctx);
+    if (pc && st->cur != st->end) *st->cur++ = reinterpret_cast<void *>(pc);
+    return _URC_NO_REASON;
+}
+void cyclomp_terminate() {
+    void *pcs[64];
+    BtState st{pcs, pcs + 64};
+    _Unwind_Backtrace(&cyclomp_bt_cb, &st);
+    size_t n = (size_t)(st.cur - pcs);
+    __android_log_print(ANDROID_LOG_FATAL, "cyclomp-crash",
+                        "uncaught exception; %zu frames", n);
+    Dl_info info;
+    for (size_t i = 0; i < n; ++i) {
+        uintptr_t pc = (uintptr_t)pcs[i], off = 0;
+        const char *lib = "?";
+        if (dladdr(pcs[i], &info) && info.dli_fbase) {
+            off = pc - (uintptr_t)info.dli_fbase;
+            lib = info.dli_fname ? info.dli_fname : "?";
+        }
+        __android_log_print(ANDROID_LOG_FATAL, "cyclomp-crash",
+                            "#%02zu off=0x%zx %s", i, off, lib);
+    }
+    std::abort();
+}
+#endif
 
 // Thin SharedString wrappers over the unit-tested core formatters.
 slint::SharedString fmt1(float v) { return slint::SharedString(core::fmt::fmt1(v)); }
@@ -176,6 +216,9 @@ extern "C" void slint_main()
 int main(int, char **)
 #endif
 {
+#ifdef __ANDROID__
+    std::set_terminate(&cyclomp_terminate);
+#endif
     auto ui = AppWindow::create();
 
     // Tunables (SETTINGS screen). Loaded before anything consumes them.
@@ -292,7 +335,16 @@ int main(int, char **)
         w.set_detail_tab(0);
         w.set_replay_playing(false);
         w.set_replay_progress(0.f);
-        w.set_screen(3);
+        // Defer the screen switch. This callback runs inside the history
+        // ListView's own pointer-event dispatch; switching screen here would
+        // destroy screen 2 (the ListView) synchronously, and Slint then walks
+        // the now-orphaned list's parent_node -> empty parent weak ->
+        // std::bad_optional_access (device-only; the emulator's event ordering
+        // happened to hide it). Hop to the next event-loop turn so the click
+        // finishes with the list still alive, then tear it down cleanly.
+        slint::invoke_from_event_loop([ui] {
+            if (auto u = ui.lock()) (**u).set_screen(3);
+        });
     });
 
     // Heading-up mode flag (toggled from the MAP screen; also drives the
