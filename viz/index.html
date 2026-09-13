@@ -726,8 +726,11 @@ async function fetchDem(lonW, latS, lonE, latN) {
   return { data, nx, ny };
 }
 
-// Vertical scale for real elevation (the relief slider, gentled: default 2x).
-const exagT = () => exag / 6;
+// Vertical scale for the TERRAIN surface (the relief slider, gentled).
+// Map+Elev pins the terrain at full relief and hands the slider to the ribbon
+// instead, so that mode's slider only changes the route's elevation.
+const MAX_RELIEF = 40; // matches the slider's max
+const exagT = () => (viewMode === 'hybrid' ? MAX_RELIEF : exag) / 6;
 
 // Drape a map crop by TRUE web-mercator position instead of the plane's linear
 // UVs. The crops are mercator images; the slab is an equirectangular mesh, so
@@ -1263,9 +1266,12 @@ document.getElementById('follow').addEventListener('click', e => {
 });
 document.getElementById('exag').addEventListener('input', e => {
   exag = Number(e.target.value);
-  if (ride) {
-    rebuildGeometry();
-    if (ride.demSample) refreshTerrain(ride); // rebuilds terrain; detail restamps
+  if (!ride) return;
+  rebuildGeometry();
+  // Map+Elev keeps the terrain pinned at full relief, so only the ribbon
+  // changes there — no terrain rebuild needed.
+  if (ride.demSample && viewMode !== 'hybrid') {
+    refreshTerrain(ride); // rebuilds terrain; detail restamps
     scheduleDetail();
   }
 });
