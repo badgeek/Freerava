@@ -465,7 +465,7 @@ async function rasterStitch(lonW, latS, lonE, latN) {
     const h = (mercY(latS) - mercY(latN)) * (1 << cand) * TS;
     const tiles = (Math.floor(mercX(lonE) * (1 << cand)) - Math.floor(mercX(lonW) * (1 << cand)) + 1) *
                   (Math.floor(mercY(latS) * (1 << cand)) - Math.floor(mercY(latN) * (1 << cand)) + 1);
-    if (Math.max(w, h) <= 4096 && tiles <= 64) { z = cand; break; }
+    if (Math.max(w, h) <= 4096 && tiles <= 80) { z = cand; break; }
   }
   const n = 1 << z;
   const tx0 = Math.floor(mercX(lonW) * n), tx1 = Math.floor(mercX(lonE) * n);
@@ -663,6 +663,14 @@ async function buildSlab(g) {
   const padLon = Math.max((lonE - lonW) * 0.25, 80 / kx);
   const padLat = Math.max((latN - latS) * 0.25, 80 / kz);
   lonW -= padLon; lonE += padLon; latS -= padLat; latN += padLat;
+
+  // Square the block off: grow the shorter axis symmetrically until the
+  // footprint is square in METRES (the two axes have different deg->m
+  // scales, so this can't be done in degrees).
+  const spanX = (lonE - lonW) * kx, spanZ = (latN - latS) * kz;
+  const side = Math.max(spanX, spanZ);
+  const growLon = (side - spanX) / 2 / kx, growLat = (side - spanZ) / 2 / kz;
+  lonW -= growLon; lonE += growLon; latS -= growLat; latN += growLat;
 
   let map;
   try { map = await mapCanvasForBbox(lonW, latS, lonE, latN); }
