@@ -260,15 +260,18 @@ scene.add(sky);
 // in a space instead of a slab hanging in a void. The camera is clamped
 // above the horizon (maxPolarAngle), so it is never seen from underneath.
 function shadowTexture() {
-  const s = 256;
+  const s = 512;
   const c = document.createElement('canvas');
   c.width = c.height = s;
   const x = c.getContext('2d');
-  const grad = x.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
-  grad.addColorStop(0.00, 'rgba(26,30,42,0.42)');
-  grad.addColorStop(0.45, 'rgba(26,30,42,0.22)');
-  grad.addColorStop(0.75, 'rgba(26,30,42,0.06)');
-  grad.addColorStop(1.00, 'rgba(26,30,42,0)');
+  // Tighter core than a plain radial falloff: mostly solid under the block,
+  // then a quick soft edge, so it reads as contact rather than a grey haze.
+  const grad = x.createRadialGradient(s / 2, s / 2, s * 0.05, s / 2, s / 2, s / 2);
+  grad.addColorStop(0.00, 'rgba(22,27,40,0.55)');
+  grad.addColorStop(0.38, 'rgba(22,27,40,0.40)');
+  grad.addColorStop(0.62, 'rgba(22,27,40,0.16)');
+  grad.addColorStop(0.82, 'rgba(22,27,40,0.04)');
+  grad.addColorStop(1.00, 'rgba(22,27,40,0)');
   x.fillStyle = grad; x.fillRect(0, 0, s, s);
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
@@ -276,6 +279,42 @@ function shadowTexture() {
 }
 let _shadowTex = null;
 const shadowTex = () => _shadowTex || (_shadowTex = shadowTexture());
+
+// Technical grid the specimen is presented on: fine cells with a heavier
+// line every eighth, faded out radially so the plane has no visible edge.
+// The falloff is baked into the texture's alpha (destination-in), which
+// avoids a second transparent mask plane.
+function gridTexture() {
+  const s = 1024, cells = 32, step = s / cells;
+  const c = document.createElement('canvas');
+  c.width = c.height = s;
+  const x = c.getContext('2d');
+  const line = (every, style, width) => {
+    x.strokeStyle = style; x.lineWidth = width;
+    x.beginPath();
+    for (let i = 0; i <= cells; i += every) {
+      const p = Math.round(i * step) + 0.5;
+      x.moveTo(p, 0); x.lineTo(p, s);
+      x.moveTo(0, p); x.lineTo(s, p);
+    }
+    x.stroke();
+  };
+  line(1, 'rgba(104,120,146,0.42)', 1);  // minor
+  line(8, 'rgba(74,90,118,0.70)', 2);    // major
+  const fade = x.createRadialGradient(s / 2, s / 2, s * 0.08, s / 2, s / 2, s / 2);
+  fade.addColorStop(0.00, 'rgba(0,0,0,1)');
+  fade.addColorStop(0.55, 'rgba(0,0,0,0.8)');
+  fade.addColorStop(0.85, 'rgba(0,0,0,0.18)');
+  fade.addColorStop(1.00, 'rgba(0,0,0,0)');
+  x.globalCompositeOperation = 'destination-in';
+  x.fillStyle = fade; x.fillRect(0, 0, s, s);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return t;
+}
+let _gridTex = null;
+const gridTex = () => _gridTex || (_gridTex = gridTexture());
 
 // ---- ride state ----
 let ride = null;
@@ -291,7 +330,7 @@ function clearRide() {
   if (!ride) return;
   for (const o of [ride.route, ride.curtain, ride.head, ride.startDot,
                    ride.endDot, ride.terrain, ride.skirt, ride.cap,
-                   ride.shadow, ride.slab])
+                   ride.shadow, ride.base, ride.slab])
     disposeObj(o);
   grid.visible = true;
   document.getElementById('attrib').style.display = 'none';
@@ -630,8 +669,8 @@ function refreshTerrain(g) {
     if (!m) return;
     g.slab.remove(m); m.geometry?.dispose?.(); m.material?.dispose?.();
   };
-  kill(g.terrain); kill(g.skirt); kill(g.cap); kill(g.shadow);
-  g.terrain = g.skirt = g.cap = g.shadow = null;
+  kill(g.terrain); kill(g.skirt); kill(g.cap); kill(g.shadow); kill(g.base);
+  g.terrain = g.skirt = g.cap = g.shadow = g.base = null;
 
   const { xW, xE, zN, zS, w, d, thick } = g.slabX;
   const cx = (xW + xE) / 2, cz = (zN + zS) / 2;
@@ -707,14 +746,26 @@ function refreshTerrain(g) {
   g.cap.position.set(cx, bottom, cz);
   g.slab.add(g.cap);
 
-  // ---- contact shadow, cast a little off-axis from the key light ----
-  const shGeo = new THREE.PlaneGeometry(Math.max(w, d) * 1.9, Math.max(w, d) * 1.9);
+  // ---- presentation base: grid plane, then the contact shadow on top ----
+  const side = Math.max(w, d);
+  const baseY = bottom - Math.max(6, thick * 0.16); // small float gap
+  const baseGeo = new THREE.PlaneGeometry(side * 3.4, side * 3.4);
+  baseGeo.rotateX(-Math.PI / 2);
+  g.base = new THREE.Mesh(baseGeo, new THREE.MeshBasicMaterial({
+    map: gridTex(), transparent: true, depthWrite: false, fog: false }));
+  g.base.renderOrder = -0.8;
+  g.base.position.set(cx, baseY, cz);
+  g.slab.add(g.base);
+
+  // Cast a little off-axis from the key light, and sit just above the grid
+  // so it darkens the cells instead of z-fighting them.
+  const shGeo = new THREE.PlaneGeometry(side * 1.55, side * 1.55);
   shGeo.rotateX(-Math.PI / 2);
   g.shadow = new THREE.Mesh(shGeo, new THREE.MeshBasicMaterial({
     map: shadowTex(), transparent: true, depthWrite: false, fog: false }));
   g.shadow.renderOrder = -0.5;
-  g.shadow.position.set(cx + w * 0.06, bottom - Math.max(4, thick * 0.12),
-                        cz + d * 0.05);
+  g.shadow.position.set(cx + w * 0.05, baseY + Math.max(0.5, thick * 0.01),
+                        cz + d * 0.04);
   g.slab.add(g.shadow);
 }
 
@@ -775,8 +826,9 @@ async function buildSlab(g) {
   }
 
   // Block depth: proportional to the footprint, but capped so a long ride
-  // doesn't turn into a skyscraper of soil.
-  g.slabX.thick = Math.min(120, Math.max(14, 0.05 * Math.min(w, d) + 10));
+  // doesn't turn into a skyscraper of soil. Deep enough to read as a cut
+  // specimen rather than a wafer.
+  g.slabX.thick = Math.min(200, Math.max(20, 0.08 * Math.min(w, d) + 12));
   const slab = new THREE.Group();
   scene.add(slab);
   g.slab = slab;
