@@ -10,6 +10,9 @@ Settings clamp_settings(Settings s) {
     s.follow_zoom = std::clamp(s.follow_zoom, 3.0, 19.0);
     s.heading_speed_kmh = std::clamp(s.heading_speed_kmh, 0.0, 30.0);
     s.bearing_min_delta_deg = std::clamp(s.bearing_min_delta_deg, 1.0, 30.0);
+    s.tunnel_base = std::clamp(s.tunnel_base, 0.1, 2.0);
+    // The cap can never sit below the base rate.
+    s.tunnel_cap = std::clamp(s.tunnel_cap, s.tunnel_base, 3.0);
     return s;
 }
 
@@ -19,6 +22,8 @@ bool save_settings(const std::string &path, const Settings &s) {
     std::fprintf(f, "follow_zoom=%.1f\n", s.follow_zoom);
     std::fprintf(f, "heading_speed_kmh=%.1f\n", s.heading_speed_kmh);
     std::fprintf(f, "bearing_min_delta_deg=%.1f\n", s.bearing_min_delta_deg);
+    std::fprintf(f, "tunnel_base=%.2f\n", s.tunnel_base);
+    std::fprintf(f, "tunnel_cap=%.2f\n", s.tunnel_cap);
     std::fprintf(f, "mock_ride=%d\n", s.mock_ride ? 1 : 0);
     std::fclose(f);
     return true;
@@ -36,6 +41,8 @@ bool load_settings(const std::string &path, Settings &out) {
         if (!std::strcmp(line, "follow_zoom")) out.follow_zoom = v;
         else if (!std::strcmp(line, "heading_speed_kmh")) out.heading_speed_kmh = v;
         else if (!std::strcmp(line, "bearing_min_delta_deg")) out.bearing_min_delta_deg = v;
+        else if (!std::strcmp(line, "tunnel_base")) out.tunnel_base = v;
+        else if (!std::strcmp(line, "tunnel_cap")) out.tunnel_cap = v;
         else if (!std::strcmp(line, "mock_ride")) out.mock_ride = v != 0;
         // unknown keys: ignored
     }

@@ -106,7 +106,12 @@ void publish_settings(AppWindow &w, const core::Settings &s) {
     w.set_set_zoom_value(fmt0((float)s.follow_zoom));
     w.set_set_heading_speed_value(fmt0((float)s.heading_speed_kmh));
     w.set_set_bearing_delta_value(fmt0((float)s.bearing_min_delta_deg));
+    w.set_set_tunnel_base_value(fmt1((float)s.tunnel_base));
+    w.set_set_tunnel_cap_value(fmt1((float)s.tunnel_cap));
     w.set_set_mock_value(slint::SharedString(s.mock_ride ? "ON" : "OFF"));
+    // The tunnel animation consumes the numeric values directly.
+    w.set_tunnel_base((float)s.tunnel_base);
+    w.set_tunnel_cap((float)s.tunnel_cap);
 }
 
 // Reset the live view to a resting/idle state.
@@ -610,6 +615,14 @@ int main(int, char **)
             break;
         case 3:
             settings->mock_ride = dir == 0 ? def.mock_ride : !settings->mock_ride;
+            break;
+        case 4:
+            settings->tunnel_base =
+                dir == 0 ? def.tunnel_base : settings->tunnel_base + dir * 0.1;
+            break;
+        case 5:
+            settings->tunnel_cap =
+                dir == 0 ? def.tunnel_cap : settings->tunnel_cap + dir * 0.1;
             break;
         }
         apply_settings(id == 0);

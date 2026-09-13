@@ -13,6 +13,10 @@ struct Settings {
     double heading_speed_kmh = 7.0;
     // Minimum bearing change (deg) before a rotation is sent to the map.
     double bearing_min_delta_deg = 3.0;
+    // Dashboard tunnel animation: idle rate and the speed-coupled cap
+    // (cycles per second).
+    double tunnel_base = 0.3;
+    double tunnel_cap = 1.0;
     // Use the fake ride on Android too (applied at next launch).
     bool mock_ride = false;
 };

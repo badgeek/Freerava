@@ -340,7 +340,12 @@ export component AppWindow inherits Window {
     in property <string> set-zoom-value: "15";
     in property <string> set-heading-speed-value: "7";
     in property <string> set-bearing-delta-value: "3";
+    in property <string> set-tunnel-base-value: "0.3";
+    in property <string> set-tunnel-cap-value: "1.0";
     in property <string> set-mock-value: "OFF";
+    // Numeric tunnel rates for the dashboard animation (cycles/s).
+    in property <float> tunnel-base: 0.3;
+    in property <float> tunnel-cap: 1.0;
     // id: 0 follow zoom, 1 heading speed, 2 bearing step, 3 mock ride.
     // dir: -1 / +1 (ignored for the mock toggle); 0 = reset to default.
     callback setting-adjust(int, int);
@@ -402,10 +407,10 @@ export component AppWindow inherits Window {
                     width: 100%;
                     height: 100%;
                     // Tunnel rate follows the rider, capped so the motion
-                    // stays calm at speed: 0.3..1.0 cycles/s (cap reached
-                    // around 35 km/h). The phase is integrated on a Timer —
-                    // multiplying a running clock by a changing rate would
-                    // make it jump at every speed update.
+                    // stays calm at speed; base/cap are SYSTEM PARAMETERS.
+                    // The phase is integrated on a Timer — multiplying a
+                    // running clock by a changing rate would make it jump
+                    // at every speed update.
                     property <float> phase: 0;
                     Timer {
                         interval: 33ms;
@@ -413,7 +418,8 @@ export component AppWindow inherits Window {
                         triggered => {
                             tunnel.phase = Math.mod(
                                 tunnel.phase + 0.033 *
-                                Math.clamp(0.3 + root.speed / 50.0, 0.3, 1.0),
+                                Math.clamp(root.tunnel-base + root.speed / 50.0,
+                                           root.tunnel-base, root.tunnel-cap),
                                 1.0);
                         }
                     }
@@ -1292,6 +1298,22 @@ export component AppWindow inherits Window {
                     reset => { root.setting-adjust(2, 0); }
                 }
                 SettingRow {
+                    label: "TUNNEL BASE  CYC/S";
+                    value: root.set-tunnel-base-value;
+                    default-value: "0.3";
+                    minus => { root.setting-adjust(4, -1); }
+                    plus => { root.setting-adjust(4, 1); }
+                    reset => { root.setting-adjust(4, 0); }
+                }
+                SettingRow {
+                    label: "TUNNEL CAP  CYC/S";
+                    value: root.set-tunnel-cap-value;
+                    default-value: "1.0";
+                    minus => { root.setting-adjust(5, -1); }
+                    plus => { root.setting-adjust(5, 1); }
+                    reset => { root.setting-adjust(5, 0); }
+                }
+                SettingRow {
                     label: "MOCK RIDE  (RESTART)";
                     value: root.set-mock-value;
                     default-value: "OFF";
@@ -1346,9 +1368,9 @@ export component AppWindow inherits Window {
     }
 
     // Sticky settings button, top-right on the three main screens (the
-    // detail page keeps its own header, settings shows ×). Console mixer
-    // glyph: three bars with offset knobs — no unicode gear, it would
-    // render as tofu in the bundled font.
+    // detail page keeps its own header, settings shows ×). Proper gear
+    // glyph drawn as an SVG Path — no unicode gear, it would render as
+    // tofu in the bundled font.
     if root.screen <= 2 : Rectangle {
         x: parent.width - 56px;
         y: root.top-inset + 9px;
@@ -1363,11 +1385,16 @@ export component AppWindow inherits Window {
                 root.screen = 4;
             }
         }
-        Rectangle { x: 14px; y: 15px; width: 20px; height: 2px; background: Palette.dim; }
-        Rectangle { x: 14px; y: 23px; width: 20px; height: 2px; background: Palette.dim; }
-        Rectangle { x: 14px; y: 31px; width: 20px; height: 2px; background: Palette.dim; }
-        Rectangle { x: 16px; y: 13px; width: 6px; height: 6px; background: Palette.phos; }
-        Rectangle { x: 26px; y: 21px; width: 6px; height: 6px; background: Palette.amber; }
-        Rectangle { x: 20px; y: 29px; width: 6px; height: 6px; background: Palette.red; }
+        Path {
+            x: 12px;
+            y: 12px;
+            width: 24px;
+            height: 24px;
+            viewbox-width: 24;
+            viewbox-height: 24;
+            fill: Palette.phos;
+            fill-rule: evenodd;
+            commands: "M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z";
+        }
     }
 }
