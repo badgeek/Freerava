@@ -218,6 +218,8 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.maxPolarAngle = Math.PI * 0.495; // stay above the ground
+// Refresh the map detail LOD after the user stops dragging/zooming.
+controls.addEventListener('end', () => scheduleDetail());
 
 // Ground grid.
 const grid = new THREE.GridHelper(4000, 80, COL.grid, COL.grid2);
@@ -330,7 +332,7 @@ function clearRide() {
   if (!ride) return;
   for (const o of [ride.route, ride.curtain, ride.head, ride.startDot,
                    ride.endDot, ride.terrain, ride.skirt, ride.cap,
-                   ride.shadow, ride.base, ride.slab])
+                   ride.shadow, ride.base, ride.detail, ride.slab])
     disposeObj(o);
   grid.visible = true;
   document.getElementById('attrib').style.display = 'none';
@@ -549,18 +551,20 @@ const loadImg = url => new Promise((res, rej) => {
 // WebGL context on the page made the browser drop the Three.js one ("WebGL
 // context was lost" -> shader validation failures -> blank viewer). A 2D
 // canvas needs no GL context, and OSM's road colours read well on the slab.
-async function rasterStitch(lonW, latS, lonE, latN) {
+async function rasterStitch(lonW, latS, lonE, latN, maxPx = 4096, maxTiles = 80) {
   const TS = 256;
-  // Highest zoom that still fits a 4096 px texture and a polite tile count.
-  // (Capping the LONG side matters for narrow out-and-back routes: a 616 x
-  // 3647 m strip would otherwise drop to z16 and blur the streets.)
+  // Highest zoom that still fits the texture / tile budget. (Capping the LONG
+  // side matters for narrow out-and-back routes: a 616 x 3647 m strip would
+  // otherwise drop to z16 and blur the streets.) A smaller bbox with the same
+  // budget naturally lands on a higher zoom — that's how the detail LOD gets
+  // its extra sharpness.
   let z = 3;
   for (let cand = 19; cand >= 3; cand--) {
     const w = (mercX(lonE) - mercX(lonW)) * (1 << cand) * TS;
     const h = (mercY(latS) - mercY(latN)) * (1 << cand) * TS;
     const tiles = (Math.floor(mercX(lonE) * (1 << cand)) - Math.floor(mercX(lonW) * (1 << cand)) + 1) *
                   (Math.floor(mercY(latS) * (1 << cand)) - Math.floor(mercY(latN) * (1 << cand)) + 1);
-    if (Math.max(w, h) <= 4096 && tiles <= 80) { z = cand; break; }
+    if (Math.max(w, h) <= maxPx && tiles <= maxTiles) { z = cand; break; }
   }
   const n = 1 << z;
   const tx0 = Math.floor(mercX(lonW) * n), tx1 = Math.floor(mercX(lonE) * n);
@@ -584,6 +588,7 @@ async function rasterStitch(lonW, latS, lonE, latN) {
   // A touch of pop so the draped texture stays legible at a viewing angle.
   ctx.filter = 'saturate(1.1) contrast(1.06)';
   ctx.drawImage(stitched, sx, sy, sw, sh, 0, 0, crop.width, crop.height);
+  crop._zoom = z;
   return crop;
 }
 
@@ -671,6 +676,7 @@ function refreshTerrain(g) {
   };
   kill(g.terrain); kill(g.skirt); kill(g.cap); kill(g.shadow); kill(g.base);
   g.terrain = g.skirt = g.cap = g.shadow = g.base = null;
+  killDetail(g); // its heightfield tracks this terrain; scheduleDetail rebuilds
 
   const { xW, xE, zN, zS, w, d, thick } = g.slabX;
   const cx = (xW + xE) / 2, cz = (zN + zS) / 2;
@@ -800,6 +806,8 @@ async function buildSlab(g) {
   mapTex.colorSpace = THREE.SRGBColorSpace;
   mapTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
   g.mapTex = mapTex;
+  g.bbox = { lonW, latS, lonE, latN };  // for the detail LOD
+  g.baseZoom = crop._zoom || 0;
 
   // Real relief for the specimen: DEM for the same bbox (flat slab if it fails).
   let dem = null;
@@ -839,6 +847,85 @@ async function buildSlab(g) {
   grid.visible = false;
   document.getElementById('attrib').style.display = 'block';
   if (!follow) frameCamera();
+  scheduleDetail();
+}
+
+// ---- Detail LOD: the base map is one fixed-resolution texture, so zooming
+// in just magnifies its pixels. When the camera settles closer, refetch a
+// small patch around the look-at point at a higher zoom and drape it (as a
+// heightfield matching the DEM) just above the terrain, so the streets under
+// the cursor sharpen. Cleared when you pull back out.
+let detailTimer = null, detailToken = 0;
+function scheduleDetail() {
+  if (!ride || !ride.bbox) return;
+  clearTimeout(detailTimer);
+  detailTimer = setTimeout(refreshDetail, 260); // after motion settles
+}
+
+function worldToLonLat(g, x, z) {
+  const { lat0, lon0, kx, kz } = g.proj;
+  return [lon0 + x / kx, lat0 - z / kz];
+}
+
+async function refreshDetail() {
+  const g = ride; if (!g || !g.bbox || !g.slabX) return;
+  const dist = camera.position.distanceTo(controls.target);
+  const side = Math.max(g.slabX.w, g.slabX.d);
+  // Zoomed out enough that the base texture is already adequate: drop detail.
+  if (dist > side * 0.62) { killDetail(g); return; }
+
+  // Patch bbox: a square around the look-at point sized to the view, clamped
+  // inside the slab.
+  const r = Math.min(side / 2, Math.max(side * 0.08, dist * 0.75));
+  const [clon, clat] = worldToLonLat(g, controls.target.x, controls.target.z);
+  const { kx, kz } = g.proj;
+  const dLon = r / kx, dLat = r / kz;
+  const lonW = Math.max(g.bbox.lonW, clon - dLon), lonE = Math.min(g.bbox.lonE, clon + dLon);
+  const latS = Math.max(g.bbox.latS, clat - dLat), latN = Math.min(g.bbox.latN, clat + dLat);
+  if (lonE <= lonW || latN <= latS) return;
+
+  const token = ++detailToken;
+  let crop;
+  try { crop = await rasterStitch(lonW, latS, lonE, latN, 2048, 40); }
+  catch { return; }
+  if (ride !== g || token !== detailToken) return;        // superseded
+  if ((crop._zoom || 0) <= g.baseZoom) { killDetail(g); return; } // no gain
+
+  const tex = new THREE.CanvasTexture(crop);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+
+  const { lat0, lon0, kx: KX, kz: KZ } = g.proj;
+  const xW = (lonW - lon0) * KX, xE = (lonE - lon0) * KX;
+  const zN = -(latN - lat0) * KZ, zS = -(latS - lat0) * KZ;
+  const pw = xE - xW, pd = zS - zN;
+  const cx = (xW + xE) / 2, cz = (zN + zS) / 2;
+  const ex = exagT();
+  const sample = g.demSample || (() => 0);
+  const M = 48;
+  const geo = new THREE.PlaneGeometry(pw, pd, M - 1, M - 1);
+  geo.rotateX(-Math.PI / 2);
+  const pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++)
+    pos.setY(i, sample(cx + pos.getX(i), cz + pos.getZ(i)) * ex);
+  geo.computeVertexNormals();
+
+  killDetail(g);
+  const mat = new THREE.MeshBasicMaterial({ map: tex });
+  mat.polygonOffset = true;            // sit cleanly on top of the base terrain
+  mat.polygonOffsetFactor = -1; mat.polygonOffsetUnits = -1;
+  g.detail = new THREE.Mesh(geo, mat);
+  g.detail.position.set(cx, 0.35, cz);
+  g.detail.renderOrder = 1;
+  g.slab.add(g.detail);
+}
+
+function killDetail(g) {
+  if (g && g.detail) {
+    g.slab?.remove(g.detail);
+    g.detail.geometry.dispose(); g.detail.material.map?.dispose();
+    g.detail.material.dispose(); g.detail = null;
+  }
 }
 
 function frameCamera() {
@@ -988,7 +1075,11 @@ document.getElementById('follow').addEventListener('click', e => {
 });
 document.getElementById('exag').addEventListener('input', e => {
   exag = Number(e.target.value);
-  if (ride) { rebuildGeometry(); if (ride.demSample) refreshTerrain(ride); }
+  if (ride) {
+    rebuildGeometry();
+    if (ride.demSample) refreshTerrain(ride); // rebuilds terrain; detail restamps
+    scheduleDetail();
+  }
 });
 
 // ---- loop ----
