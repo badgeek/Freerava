@@ -193,6 +193,37 @@ void threadMain() {
     bool mapTexReady = false;
     int cur = 0;
 
+    // The stock dark style keeps roads at 7-16% lightness — near invisible
+    // on the phone. Brighten the road line layers (with a slight phosphor
+    // tint) once the style has loaded; getLayer returns null until then,
+    // so this retries each loop pass until it lands.
+    bool roadsBrightened = false;
+    auto brighten_roads = [&map, &roadsBrightened] {
+        if (roadsBrightened) return;
+        const std::pair<const char *, mln::Color> recolor[] = {
+            {"highway_minor", {0.20f, 0.22f, 0.20f, 1.f}},
+            {"highway_path", {0.16f, 0.18f, 0.16f, 1.f}},
+            {"highway_major_inner", {0.29f, 0.31f, 0.29f, 1.f}},
+            {"highway_major_subtle", {0.25f, 0.27f, 0.25f, 1.f}},
+            {"highway_major_casing", {0.33f, 0.33f, 0.33f, 0.8f}},
+            {"highway_motorway_inner", {0.33f, 0.35f, 0.33f, 1.f}},
+            {"highway_motorway_subtle", {0.22f, 0.24f, 0.22f, 1.f}},
+            {"highway_motorway_casing", {0.36f, 0.36f, 0.36f, 0.8f}},
+        };
+        bool any = false;
+        for (const auto &r : recolor) {
+            if (auto *l = static_cast<mln::style::LineLayer *>(
+                    map.getStyle().getLayer(r.first))) {
+                l->setLineColor(r.second);
+                any = true;
+            }
+        }
+        if (any) {
+            roadsBrightened = true;
+            MAPGL_LOG("dark style roads brightened");
+        }
+    };
+
     for (;;) {
         bool ctr, mset, trk, brgDirty;
         double la, lo, zm, dx, dy, sc, ax, ay, mlat, mlon, brg;
@@ -229,6 +260,7 @@ void threadMain() {
             mlat = s.markerLat;
             mlon = s.markerLon;
         }
+        brighten_roads();
         if (ctr || brgDirty) {
             mln::CameraOptions cam;
             if (ctr) {
