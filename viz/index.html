@@ -61,7 +61,6 @@
       <button data-mode="hybrid" class="text-xs font-semibold text-muted rounded-full px-[13px] py-[6px] leading-none whitespace-nowrap transition hover:text-ink">Map&nbsp;+&nbsp;Elev</button>
       <button data-mode="grid" class="text-xs font-semibold text-muted rounded-full px-[13px] py-[6px] leading-none whitespace-nowrap transition hover:text-ink">Grid</button>
       <button data-mode="template" class="text-xs font-semibold text-muted rounded-full px-[13px] py-[6px] leading-none whitespace-nowrap transition hover:text-ink">Elevation</button>
-      <button data-mode="progress" class="text-xs font-semibold text-muted rounded-full px-[13px] py-[6px] leading-none whitespace-nowrap transition hover:text-ink">Progress</button>
     </div>
 
     <div class="flex items-stretch shrink-0">
@@ -114,6 +113,9 @@
            grid place-items-center transition-colors">&#9654;</button>
   <input id="scrub" type="range" min="0" max="1000" value="1000" class="flex-1" />
   <span id="clock" class="text-ink text-sm font-semibold min-w-[52px] text-right tabular-nums">0:00</span>
+  <button id="speed" title="Playback speed"
+    class="pill text-[12.5px] font-semibold text-muted border border-bd rounded-full px-[13px] py-[7px]
+           min-w-[54px] tabular-nums whitespace-nowrap transition hover:border-faint hover:text-ink">6&times;</button>
   <button id="follow"
     class="pill text-[12.5px] font-semibold text-muted border border-bd rounded-full px-[13px] py-[7px]
            whitespace-nowrap transition hover:border-faint hover:text-ink">Chase cam</button>
@@ -452,7 +454,7 @@ function rebuildGeometry() {
   //  overMap (Map+Elev): the same altitude ribbon but riding HIGH above the
   //    real terrain surface, curtain dropping back down to the terrain.
   //  else (Map/Grid): draped on the terrain relief.
-  const overGrid = viewMode === 'template' || viewMode === 'progress';
+  const overGrid = viewMode === 'template';
   const overMap = viewMode === 'hybrid';
   const HYBRID_RIBBON = 2.4; // extra altitude gain for the floating ribbon
   const surfaceOf = p => (g.demSample ? g.demSample(p.x, p.z) * exagT() : 0);
@@ -888,9 +890,13 @@ function refreshTerrain(g) {
 
 // ---- View modes ----------------------------------------------------------
 // map      : the map-draped specimen (default).
+// hybrid   : the map specimen with the track raised as an elevation ribbon.
 // grid     : wireframe elevation mesh, no map texture — a technical read.
-// template : the bare track laid out complete, no terrain (a route blueprint).
-// progress : same bare track, played back progressively from the start.
+// template : the bare track over the grid (play/scrub animates the reveal).
+// Playback speed presets (multiples of real ride time).
+const SPEEDS = [2, 6, 15, 40, 100];
+let speedIdx = 1; // default 6x, the old hard-coded rate
+
 let viewMode = 'map';
 function applyViewMode(m) {
   if (m) viewMode = m;
@@ -898,7 +904,7 @@ function applyViewMode(m) {
   const vis = (o, on) => { if (o) o.visible = on; };
   const isMap = viewMode === 'map', isGrid = viewMode === 'grid';
   const isHybrid = viewMode === 'hybrid';
-  const isTrack = viewMode === 'template' || viewMode === 'progress';
+  const isTrack = viewMode === 'template';
   const solid = isMap || isGrid || isHybrid; // has the specimen block
 
   vis(g.terrain, isMap || isHybrid); // hybrid shows the (flat) map slab
@@ -909,16 +915,15 @@ function applyViewMode(m) {
   vis(g.shadow, solid);
   vis(g.base, true);                 // grid stage under every mode
   vis(g.curtain, isTrack || isGrid || isHybrid); // elevation ribbon
-  // Elevation/Progress: lift the grid to the ribbon's baseline (y=0); the
-  // specimen block is hidden there, so its deeper floor would just float away.
+  // Elevation: lift the grid to the ribbon's baseline (y=0); the specimen
+  // block is hidden there, so its deeper floor would just float away.
   if (g.base && g.baseY != null)
     g.base.position.y = isTrack ? 0 : g.baseY;
 
   document.querySelectorAll('#viewmodes button').forEach(b =>
     b.classList.toggle('on', b.dataset.mode === viewMode));
 
-  if (viewMode === 'template') { playing = false; setPlayIcon(); setProgress(1); }
-  if (viewMode === 'progress') { headT = 0; playing = true; setPlayIcon(); setProgress(0); }
+  if (isTrack) { playing = false; setPlayIcon(); setProgress(1); }
   if (isMap) scheduleDetail();
 }
 
@@ -1267,6 +1272,10 @@ document.querySelectorAll('#viewmodes button').forEach(b =>
     applyViewMode();                       // visibilities, playback, buttons
     if (!follow) frameCamera(); // reframe: ribbon vs specimen differ in extent
   }));
+document.getElementById('speed').addEventListener('click', e => {
+  speedIdx = (speedIdx + 1) % SPEEDS.length;  // cycle through the presets
+  e.target.innerHTML = SPEEDS[speedIdx] + '&times;';
+});
 document.getElementById('follow').addEventListener('click', e => {
   follow = !follow; e.target.classList.toggle('on', follow);
   if (!ride) return;
@@ -1291,7 +1300,9 @@ function animate(now) {
   requestAnimationFrame(animate);
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   if (ride && playing) {
-    const dur = Math.max(4, (ride.tMax - ride.tMin) / 6); // ~6x real time, min 4s
+    // Playback runs at the selected multiple of real time, floored at 2s so a
+    // very short ride still animates rather than snapping to the end.
+    const dur = Math.max(2, (ride.tMax - ride.tMin) / SPEEDS[speedIdx]);
     headT += dt / dur;
     if (headT >= 1) { headT = 1; playing = false; setPlayIcon(); }
     setProgress(headT);
