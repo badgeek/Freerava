@@ -36,6 +36,10 @@
   #app { position: fixed; inset: 0; }
   canvas { display: block; }
 
+  /* ---- Live terrain map mode (MapLibre) ---- */
+  #map { position: fixed; inset: 0; display: none; z-index: 1; }
+  #map .maplibregl-ctrl-bottom-right { bottom: 84px; }
+
   /* ---- Header: brand + ride title + stat row ---- */
   header { position: fixed; top: 0; left: 0; right: 0; background: var(--card);
     border-bottom: 1px solid var(--border); z-index: 3; }
@@ -121,6 +125,7 @@
 </head>
 <body>
 <div id="app"></div>
+<div id="map"></div>
 
 <header style="display:none" id="header">
   <div class="head-inner">
@@ -154,7 +159,8 @@
   <input id="scrub" type="range" min="0" max="1000" value="1000" />
   <span id="clock">0:00</span>
   <button id="follow" class="pill">Chase cam</button>
-  <span class="ctl">Relief <input id="exag" type="range" min="0" max="40" value="12" /></span>
+  <button id="viewtoggle" class="pill">Terrain map</button>
+  <span class="ctl" id="reliefctl">Relief <input id="exag" type="range" min="0" max="40" value="12" /></span>
 </div>
 
 <div id="drop">
@@ -232,6 +238,8 @@ function clearRide() {
     disposeObj(o);
   grid.visible = true;
   document.getElementById('attrib').style.display = 'none';
+  if (liveMap) { try { liveMap.remove(); } catch {} liveMap = null; }
+  if (mapMode) setMapMode(false);
   ride = null;
 }
 
@@ -283,8 +291,10 @@ function buildRide(gj) {
   const P = proj.pts;
   const vMax = Math.max(1e-3, ...speed), vMin = Math.min(...speed);
   const vNorm = speed.map(s => (s - vMin) / Math.max(1e-3, vMax - vMin));
+  const cumD = [0];
+  for (let i = 1; i < P.length; i++) cumD.push(cumD[i - 1] + P[i].distanceTo(P[i - 1]));
 
-  const g = { P, proj, coords, speed, tArr, vNorm, vMin, vMax,
+  const g = { P, proj, coords, speed, tArr, vNorm, vMin, vMax, cumD,
               tMin: tArr[0], tMax: tArr[tArr.length - 1],
               summary: gj.properties || {} };
   ride = g;
@@ -546,6 +556,106 @@ function frameCamera() {
   camera.near = d / 200; camera.far = d * 40; camera.updateProjectionMatrix();
 }
 
+// ---- Live terrain map mode: an interactive MapLibre map with real 3D
+// terrain (hillshade + raster-dem + sky), the ride as a speed-gradient line.
+// DEM: AWS/Mapzen terrarium tiles — global coverage, free, no API key.
+let mapMode = false, liveMap = null;
+const DEM = {
+  type: 'raster-dem', encoding: 'terrarium', tileSize: 256, maxzoom: 15,
+  tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
+  attribution: 'Terrain &copy; Mapzen/AWS Open Data',
+};
+
+function domMarker(color, size) {
+  const d = document.createElement('div');
+  d.style.cssText = `width:${size}px;height:${size}px;border-radius:50%;` +
+    `background:${color};border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4);`;
+  return new maplibregl.Marker({ element: d });
+}
+
+// line-progress -> colour, sampled along cumulative distance (<= ~48 stops).
+function gradientStops(g) {
+  const expr = ['interpolate', ['linear'], ['line-progress']];
+  const n = g.P.length, step = Math.max(1, Math.ceil(n / 48));
+  const total = Math.max(1e-6, g.cumD[n - 1]);
+  const tmp = new THREE.Color();
+  let lastF = -1;
+  for (let i = 0; i < n; i += step) {
+    let f = g.cumD[i] / total;
+    if (f <= lastF) f = lastF + 1e-4;
+    if (f >= 1) break;
+    lastF = f;
+    speedColor(g.vNorm[i], tmp);
+    expr.push(f, '#' + tmp.getHexString());
+  }
+  speedColor(g.vNorm[n - 1], tmp);
+  expr.push(1, '#' + tmp.getHexString());
+  return expr;
+}
+
+function ensureLiveMap() {
+  if (liveMap || !ride) return;
+  const g = ride;
+  liveMap = new maplibregl.Map({
+    container: 'map',
+    style: {
+      version: 8,
+      sources: {
+        osm: { type: 'raster', tileSize: 256, maxzoom: 19,
+               tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+               attribution: '&copy; OpenStreetMap contributors' },
+        terrainSource: DEM,
+        hillshadeSource: DEM,
+      },
+      layers: [
+        { id: 'osm', type: 'raster', source: 'osm' },
+        { id: 'hills', type: 'hillshade', source: 'hillshadeSource',
+          layout: { visibility: 'visible' },
+          paint: { 'hillshade-shadow-color': '#473B24' } },
+      ],
+      terrain: { source: 'terrainSource', exaggeration: 1 },
+      sky: {},
+    },
+    maxZoom: 18,
+    maxPitch: 85,
+  });
+  liveMap.addControl(new maplibregl.NavigationControl({
+    visualizePitch: true, showZoom: true, showCompass: true }), 'bottom-right');
+  liveMap.addControl(new maplibregl.TerrainControl({
+    source: 'terrainSource', exaggeration: 1 }), 'bottom-right');
+
+  liveMap.on('load', () => {
+    const line = g.coords.map(c => [c[0], c[1]]);
+    liveMap.addSource('route', { type: 'geojson', lineMetrics: true,
+      data: { type: 'Feature', geometry: { type: 'LineString', coordinates: line } } });
+    liveMap.addLayer({ id: 'route-casing', type: 'line', source: 'route',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': '#ffffff', 'line-width': 8, 'line-opacity': 0.9 } });
+    liveMap.addLayer({ id: 'route', type: 'line', source: 'route',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-width': 4.5, 'line-gradient': gradientStops(g) } });
+    g.mapStart = domMarker('#16a34a', 12).setLngLat(line[0]).addTo(liveMap);
+    g.mapEnd = domMarker('#dc2626', 12).setLngLat(line[line.length - 1]).addTo(liveMap);
+    g.mapHead = domMarker('#fc5200', 16).setLngLat(line[0]).addTo(liveMap);
+    const b = new maplibregl.LngLatBounds();
+    for (const c of line) b.extend(c);
+    liveMap.fitBounds(b, { padding: 90, duration: 0, pitch: 60 });
+    setProgress(headT);
+  });
+}
+
+function setMapMode(on) {
+  mapMode = on;
+  const btn = document.getElementById('viewtoggle');
+  btn.classList.toggle('on', on);
+  btn.textContent = on ? 'Model view' : 'Terrain map';
+  document.getElementById('map').style.display = on ? 'block' : 'none';
+  document.getElementById('reliefctl').style.display = on ? 'none' : 'flex';
+  document.getElementById('hint').style.display = (!on && ride) ? 'block' : 'none';
+  document.getElementById('attrib').style.display =
+    (!on && ride?.slab) ? 'block' : 'none'; // the live map shows its own
+}
+
 // Reveal + head position, driven by time fraction 0..1.
 function setProgress(frac) {
   const g = ride; if (!g) return;
@@ -567,10 +677,26 @@ function setProgress(frac) {
   const hp = a.clone().lerp(b, f);
   g.head.position.copy(hp);
 
-  if (follow) {
+  if (follow && !mapMode) {
     const off = new THREE.Vector3(80, 120, 140);
     controls.target.lerp(hp, 0.12);
     camera.position.lerp(hp.clone().add(off), 0.08);
+  }
+
+  // Terrain-map mode: move the head marker; chase = fly the map camera along
+  // the course with a tilted view.
+  if (mapMode && liveMap && g.mapHead) {
+    const ca = g.coords[i - 1], cb = g.coords[Math.min(i, g.coords.length - 1)];
+    const lon = ca[0] + f * (cb[0] - ca[0]), lat = ca[1] + f * (cb[1] - ca[1]);
+    g.mapHead.setLngLat([lon, lat]);
+    if (follow) {
+      const dx = (cb[0] - ca[0]) * Math.cos(lat * Math.PI / 180);
+      const dy = cb[1] - ca[1];
+      const opts = { center: [lon, lat], pitch: 65 };
+      if (Math.abs(dx) + Math.abs(dy) > 1e-9)
+        opts.bearing = Math.atan2(dx, dy) * 180 / Math.PI;
+      liveMap.jumpTo(opts);
+    }
   }
 }
 
@@ -647,6 +773,17 @@ document.getElementById('follow').addEventListener('click', e => {
   follow = !follow; e.target.classList.toggle('on', follow);
   if (!follow && ride) frameCamera();
 });
+document.getElementById('viewtoggle').addEventListener('click', async () => {
+  if (!ride) return;
+  if (!mapMode) {
+    try { await loadMapLibre(); } catch { return; } // offline: stay in model view
+    setMapMode(true);
+    ensureLiveMap();
+    liveMap?.resize();
+  } else {
+    setMapMode(false);
+  }
+});
 document.getElementById('exag').addEventListener('input', e => {
   exag = Number(e.target.value); if (ride) rebuildGeometry();
 });
@@ -662,8 +799,10 @@ function animate(now) {
     if (headT >= 1) { headT = 1; playing = false; setPlayIcon(); }
     setProgress(headT);
   }
-  controls.update();
-  renderer.render(scene, camera);
+  if (!mapMode) { // the live map renders itself; don't burn GPU behind it
+    controls.update();
+    renderer.render(scene, camera);
+  }
 }
 requestAnimationFrame(animate);
 
