@@ -106,6 +106,8 @@ endif()
 set(_mln_build_android "${CYCLOMP_MLN_DIR}/build-android")
 if(ANDROID)
     target_link_libraries(cyclomp PRIVATE log android)
+    # Real GPS telemetry (LocationManager over JNI) — independent of the map.
+    target_sources(cyclomp PRIVATE src/gps_telemetry_android.cpp)
     if(EXISTS "${_mln_build_android}/libmbgl-core.a")
         message(STATUS "cyclomp: MapLibre map enabled for Android (${_mln_build_android})")
         if(CYCLOMP_MAP_GL)
