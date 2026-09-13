@@ -4,6 +4,7 @@
 #pragma once
 
 #include "core/telemetry.h"
+#include "core/track.h"
 
 #include <ctime>
 #include <optional>
@@ -35,6 +36,7 @@ struct SessionSummary {
     bool has_cadence = false;
     int avg_hr = 0;
     bool has_hr = false;
+    std::vector<TrackPoint> track; // recorded ride path (may be empty)
 };
 
 // 1..5 from bpm; thresholds 105/125/145/165.
