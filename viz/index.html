@@ -200,7 +200,9 @@ app.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(COL.bg);
-scene.fog = new THREE.Fog(COL.bg, 500, 3200);
+// Range is set from the ride's own size in frameCamera() — fixed distances
+// fogged a multi-kilometre ride out completely.
+scene.fog = new THREE.Fog(COL.bg, 1e6, 2e6);
 
 const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 20000);
 camera.position.set(300, 320, 480);
@@ -722,6 +724,9 @@ function frameCamera() {
   controls.target.copy(c);
   camera.position.set(c.x + d * 0.55, c.y + d * 0.7, c.z + d * 0.75);
   camera.near = d / 200; camera.far = d * 40; camera.updateProjectionMatrix();
+  // Haze only well beyond the framed block, so it reads as depth on a
+  // distant corner without ever veiling the map.
+  scene.fog.near = d * 1.6; scene.fog.far = d * 6;
 }
 
 // Reveal + head position, driven by time fraction 0..1.
