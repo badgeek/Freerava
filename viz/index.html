@@ -147,7 +147,7 @@
 </div>
 
 <div id="hint" style="display:none">Drag to orbit &nbsp;·&nbsp; scroll to zoom</div>
-<div id="attrib" style="display:none">&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a></div>
+<div id="attrib" style="display:none"></div>
 
 <div id="transport" style="display:none">
   <button id="play" aria-label="Play">&#9654;</button>
@@ -364,7 +364,6 @@ function rebuildGeometry() {
 // Basemap raster tiles (CARTO Positron, CORS-enabled) are stitched onto a
 // canvas, cropped to the padded ride bbox, and laid on top of a box whose
 // sides wear a soil/rock gradient. Fails silently (grid stays) when offline.
-const TS = 512; // @2x tiles
 const mercX = lon => (lon + 180) / 360;
 const mercY = lat => {
   const s = Math.sin(lat * Math.PI / 180);
@@ -376,6 +375,102 @@ const loadImg = url => new Promise((res, rej) => {
   im.onload = () => res(im); im.onerror = () => rej(new Error('tile failed'));
   im.src = url;
 });
+
+// -- Primary map source: MapLibre GL + OpenFreeMap (free, no API key — the
+// same tile host the cyclomp app uses). The bbox is rendered once in a
+// hidden container, grabbed as a canvas, and the map is thrown away.
+let maplibreLoad = null;
+function loadMapLibre() {
+  if (window.maplibregl) return Promise.resolve();
+  if (!maplibreLoad) maplibreLoad = new Promise((res, rej) => {
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css';
+    document.head.appendChild(css);
+    const s = document.createElement('script');
+    s.src = 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js';
+    s.onload = () => res(); s.onerror = () => rej(new Error('maplibre load failed'));
+    document.head.appendChild(s);
+  });
+  return maplibreLoad;
+}
+
+async function renderVectorMap(lonW, latS, lonE, latN) {
+  await loadMapLibre();
+  const aspect = (mercX(lonE) - mercX(lonW)) / (mercY(latS) - mercY(latN));
+  const base = 1024;
+  const w = aspect >= 1 ? base : Math.max(256, Math.round(base * aspect));
+  const h = aspect >= 1 ? Math.max(256, Math.round(base / aspect)) : base;
+  const div = document.createElement('div');
+  div.style.cssText = `position:fixed;left:-10000px;top:0;width:${w}px;height:${h}px;`;
+  document.body.appendChild(div);
+  return new Promise((res, rej) => {
+    const m = new maplibregl.Map({
+      container: div,
+      style: 'https://tiles.openfreemap.org/styles/positron',
+      interactive: false, attributionControl: false,
+      preserveDrawingBuffer: true, fadeDuration: 0, pixelRatio: 2,
+    });
+    const cleanup = () => { clearTimeout(to); try { m.remove(); } catch {} div.remove(); };
+    const to = setTimeout(() => { cleanup(); rej(new Error('map render timeout')); }, 20000);
+    m.once('load', () => {
+      m.fitBounds([[lonW, latS], [lonE, latN]], { padding: 0, duration: 0 });
+      m.once('idle', () => {
+        try {
+          const src = m.getCanvas();
+          const c = document.createElement('canvas');
+          c.width = src.width; c.height = src.height;
+          c.getContext('2d').drawImage(src, 0, 0);
+          cleanup(); res(c);
+        } catch (e) { cleanup(); rej(e); }
+      });
+    });
+  });
+}
+
+// -- Fallback: stitch OSM standard raster tiles (no key either), cropped to
+// the exact bbox. Busier style, but keeps the slab working if the vector
+// path is blocked.
+async function rasterStitch(lonW, latS, lonE, latN) {
+  const TS = 256;
+  let z = 3;
+  for (let cand = 19; cand >= 3; cand--) {
+    const w = (mercX(lonE) - mercX(lonW)) * (1 << cand) * TS;
+    const h = (mercY(latS) - mercY(latN)) * (1 << cand) * TS;
+    const tiles = (Math.floor(mercX(lonE) * (1 << cand)) - Math.floor(mercX(lonW) * (1 << cand)) + 1) *
+                  (Math.floor(mercY(latS) * (1 << cand)) - Math.floor(mercY(latN) * (1 << cand)) + 1);
+    if (Math.max(w, h) <= 2048 && tiles <= 30) { z = cand; break; }
+  }
+  const n = 1 << z;
+  const tx0 = Math.floor(mercX(lonW) * n), tx1 = Math.floor(mercX(lonE) * n);
+  const ty0 = Math.floor(mercY(latN) * n), ty1 = Math.floor(mercY(latS) * n);
+  const jobs = [];
+  for (let ty = ty0; ty <= ty1; ty++)
+    for (let tx = tx0; tx <= tx1; tx++)
+      jobs.push(loadImg(`https://tile.openstreetmap.org/${z}/${tx}/${ty}.png`)
+        .then(im => ({ im, tx, ty })));
+  const tiles = await Promise.all(jobs);
+  const stitched = document.createElement('canvas');
+  stitched.width = (tx1 - tx0 + 1) * TS; stitched.height = (ty1 - ty0 + 1) * TS;
+  const sc = stitched.getContext('2d');
+  for (const t of tiles) sc.drawImage(t.im, (t.tx - tx0) * TS, (t.ty - ty0) * TS, TS, TS);
+  const px = v => v * n * TS;
+  const sx = px(mercX(lonW)) - tx0 * TS, sy = px(mercY(latN)) - ty0 * TS;
+  const sw = px(mercX(lonE)) - px(mercX(lonW)), sh = px(mercY(latS)) - px(mercY(latN));
+  const crop = document.createElement('canvas');
+  crop.width = Math.max(2, Math.round(sw)); crop.height = Math.max(2, Math.round(sh));
+  crop.getContext('2d').drawImage(stitched, sx, sy, sw, sh, 0, 0, crop.width, crop.height);
+  return crop;
+}
+
+const OSM_LINK = '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors';
+async function mapCanvasForBbox(lonW, latS, lonE, latN) {
+  try {
+    return { canvas: await renderVectorMap(lonW, latS, lonE, latN),
+             attrib: OSM_LINK + ' &middot; <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a>' };
+  } catch {}
+  return { canvas: await rasterStitch(lonW, latS, lonE, latN), attrib: OSM_LINK };
+}
 
 function earthSideTexture() {
   const c = document.createElement('canvas');
@@ -404,42 +499,12 @@ async function buildSlab(g) {
   const padLat = Math.max((latN - latS) * 0.25, 80 / kz);
   lonW -= padLon; lonE += padLon; latS -= padLat; latN += padLat;
 
-  // Highest zoom whose crop stays a sane texture size / tile count.
-  let z = 3;
-  for (let cand = 19; cand >= 3; cand--) {
-    const w = (mercX(lonE) - mercX(lonW)) * (1 << cand) * TS;
-    const h = (mercY(latS) - mercY(latN)) * (1 << cand) * TS;
-    const tiles = (Math.floor(mercX(lonE) * (1 << cand)) - Math.floor(mercX(lonW) * (1 << cand)) + 1) *
-                  (Math.floor(mercY(latS) * (1 << cand)) - Math.floor(mercY(latN) * (1 << cand)) + 1);
-    if (Math.max(w, h) <= 2304 && tiles <= 25) { z = cand; break; }
-  }
-
-  const n = 1 << z;
-  const tx0 = Math.floor(mercX(lonW) * n), tx1 = Math.floor(mercX(lonE) * n);
-  const ty0 = Math.floor(mercY(latN) * n), ty1 = Math.floor(mercY(latS) * n);
-  const subs = ['a', 'b', 'c', 'd'];
-  const jobs = [];
-  for (let ty = ty0; ty <= ty1; ty++)
-    for (let tx = tx0; tx <= tx1; tx++)
-      jobs.push(loadImg(`https://${subs[(tx + ty) % 4]}.basemaps.cartocdn.com/light_all/${z}/${tx}/${ty}@2x.png`)
-        .then(im => ({ im, tx, ty })));
-
-  let tiles;
-  try { tiles = await Promise.all(jobs); }
+  let map;
+  try { map = await mapCanvasForBbox(lonW, latS, lonE, latN); }
   catch { return; } // offline / blocked: keep the plain grid
   if (ride !== g) return; // a newer file was dropped while we fetched
-
-  // Stitch, then crop to the exact bbox.
-  const stitched = document.createElement('canvas');
-  stitched.width = (tx1 - tx0 + 1) * TS; stitched.height = (ty1 - ty0 + 1) * TS;
-  const sc = stitched.getContext('2d');
-  for (const t of tiles) sc.drawImage(t.im, (t.tx - tx0) * TS, (t.ty - ty0) * TS, TS, TS);
-  const px = v => v * n * TS;
-  const sx = px(mercX(lonW)) - tx0 * TS, sy = px(mercY(latN)) - ty0 * TS;
-  const sw = px(mercX(lonE)) - px(mercX(lonW)), sh = px(mercY(latS)) - px(mercY(latN));
-  const crop = document.createElement('canvas');
-  crop.width = Math.max(2, Math.round(sw)); crop.height = Math.max(2, Math.round(sh));
-  crop.getContext('2d').drawImage(stitched, sx, sy, sw, sh, 0, 0, crop.width, crop.height);
+  document.getElementById('attrib').innerHTML = map.attrib;
+  const crop = map.canvas;
 
   const mapTex = new THREE.CanvasTexture(crop);
   mapTex.colorSpace = THREE.SRGBColorSpace;
