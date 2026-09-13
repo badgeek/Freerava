@@ -301,7 +301,7 @@ function clearRide() {
   if (!ride) return;
   for (const o of [ride.route, ride.curtain, ride.head, ride.startDot,
                    ride.endDot, ride.terrain, ride.wire, ride.skirt, ride.cap,
-                   ride.shadow, ride.base, ride.detail, ride.slab])
+                   ride.shadow, ride.base, ride.outline, ride.detail, ride.slab])
     disposeObj(o);
   grid.visible = true;
   document.getElementById('attrib').style.display = 'none';
@@ -767,8 +767,9 @@ function refreshTerrain(g) {
     if (!m) return;
     g.slab.remove(m); m.geometry?.dispose?.(); m.material?.dispose?.();
   };
-  kill(g.terrain); kill(g.wire); kill(g.skirt); kill(g.cap); kill(g.shadow); kill(g.base);
-  g.terrain = g.wire = g.skirt = g.cap = g.shadow = g.base = null;
+  kill(g.terrain); kill(g.wire); kill(g.skirt); kill(g.cap); kill(g.shadow);
+  kill(g.base); kill(g.outline);
+  g.terrain = g.wire = g.skirt = g.cap = g.shadow = g.base = g.outline = null;
   killDetail(g); // its heightfield tracks this terrain; scheduleDetail rebuilds
 
   const { xW, xE, zN, zS, w, d, thick } = g.slabX;
@@ -854,6 +855,32 @@ function refreshTerrain(g) {
   g.cap.position.set(cx, bottom, cz);
   g.slab.add(g.cap);
 
+  // ---- white wireframe outline: the block's silhouette edges (top rim
+  // following the relief, the four verticals, and the base rectangle) drawn
+  // as crisp white lines so the specimen reads as a cut sample. ----
+  const ow = [];
+  const push = (ax, ay, az, bx, by, bz) => ow.push(ax, ay, az, bx, by, bz);
+  for (let k = 0; k < rim.length - 1; k++) {           // top rim
+    const a = rim[k], b = rim[k + 1];
+    push(cx + pos.getX(a), pos.getY(a) + 0.3, cz + pos.getZ(a),
+         cx + pos.getX(b), pos.getY(b) + 0.3, cz + pos.getZ(b));
+  }
+  const corners = [idx(0, 0), idx(N - 1, 0), idx(N - 1, N - 1), idx(0, N - 1)];
+  for (const ci of corners)                            // verticals
+    push(cx + pos.getX(ci), pos.getY(ci) + 0.3, cz + pos.getZ(ci),
+         cx + pos.getX(ci), bottom, cz + pos.getZ(ci));
+  for (let k = 0; k < 4; k++) {                        // base rectangle
+    const a = corners[k], b = corners[(k + 1) % 4];
+    push(cx + pos.getX(a), bottom, cz + pos.getZ(a),
+         cx + pos.getX(b), bottom, cz + pos.getZ(b));
+  }
+  const og = new THREE.BufferGeometry();
+  og.setAttribute('position', new THREE.BufferAttribute(new Float32Array(ow), 3));
+  g.outline = new THREE.LineSegments(og, new THREE.LineBasicMaterial({
+    color: 0xffffff, transparent: true, opacity: 0.9, fog: false }));
+  g.outline.renderOrder = 2;
+  g.slab.add(g.outline);
+
   // ---- presentation base: grid plane, then the contact shadow on top ----
   const side = Math.max(w, d);
   const baseY = bottom - Math.max(6, thick * 0.16); // small float gap
@@ -901,6 +928,7 @@ function applyViewMode(m) {
   vis(g.skirt, solid);               // earth walls only with a solid/grid top
   vis(g.cap, solid);
   vis(g.shadow, solid);
+  vis(g.outline, solid);      // white edge wireframe on the block
   vis(g.base, true);                 // grid stage under every mode
   vis(g.curtain, isTrack || isGrid || isHybrid); // elevation ribbon
   // Elevation/Progress: lift the grid to the ribbon's baseline (y=0); the
