@@ -238,11 +238,11 @@ function shadowTexture() {
   // Tighter core than a plain radial falloff: mostly solid under the block,
   // then a quick soft edge, so it reads as contact rather than a grey haze.
   const grad = x.createRadialGradient(s / 2, s / 2, s * 0.05, s / 2, s / 2, s / 2);
-  grad.addColorStop(0.00, 'rgba(5,22,15,0.58)');
-  grad.addColorStop(0.38, 'rgba(5,22,15,0.42)');
-  grad.addColorStop(0.62, 'rgba(5,22,15,0.17)');
-  grad.addColorStop(0.82, 'rgba(5,22,15,0.04)');
-  grad.addColorStop(1.00, 'rgba(5,22,15,0)');
+  grad.addColorStop(0.00, 'rgba(22,27,40,0.55)');
+  grad.addColorStop(0.38, 'rgba(22,27,40,0.40)');
+  grad.addColorStop(0.62, 'rgba(22,27,40,0.16)');
+  grad.addColorStop(0.82, 'rgba(22,27,40,0.04)');
+  grad.addColorStop(1.00, 'rgba(22,27,40,0)');
   x.fillStyle = grad; x.fillRect(0, 0, s, s);
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
@@ -270,10 +270,9 @@ function gridTexture() {
     }
     x.stroke();
   };
-  // Self-healing cutting-mat look: muted green field with pale mat lines.
-  x.fillStyle = '#436b5c'; x.fillRect(0, 0, s, s);
-  line(1, 'rgba(210,232,220,0.22)', 1);  // minor
-  line(8, 'rgba(226,244,234,0.40)', 2);  // major
+  // Plain technical grid: lines only, no filled field.
+  line(1, 'rgba(120,134,158,0.18)', 1);  // minor
+  line(8, 'rgba(92,108,134,0.34)', 2);   // major
   // Long, gradual falloff — a short one showed up as a hard dark disc sitting
   // on the light backdrop. Starts easing almost immediately and never has a
   // visible rim.
