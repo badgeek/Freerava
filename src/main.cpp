@@ -416,7 +416,9 @@ int main(int, char **)
                                   lw / 512.0);
             double zy = std::log2(180.0 / std::max(lat1 - lat0, 1e-4) *
                                   lh / 512.0);
-            double z = std::clamp(std::min(zx, zy) - 0.4, 3.0, 19.0);
+            // -0.9: comfortable margin so the track clears the replay bar
+            // and the header instead of hugging the view edges.
+            double z = std::clamp(std::min(zx, zy) - 0.9, 3.0, 19.0);
             mapgl::set_camera((lat0 + lat1) / 2.0, (lon0 + lon1) / 2.0, z);
             mapgl::set_marker(rp->trk.front().lat, rp->trk.front().lon);
         }
