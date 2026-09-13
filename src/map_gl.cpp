@@ -73,6 +73,8 @@ struct Service {
     bool renderDirty = false;      // re-render without camera change (poke)
     double dx = 0, dy = 0;         // accumulated pan (logical px)
     double scale = 1.0;            // accumulated pinch factor
+    double bearing = 0;            // heading-up camera rotation
+    bool bearingDirty = false;
     double ax = 0, ay = 0;         // pinch anchor (logical px)
 
     // Live ride track (lat/lon pairs, UI thread writes, map thread applies).
@@ -192,20 +194,24 @@ void threadMain() {
     int cur = 0;
 
     for (;;) {
-        bool ctr, mset, trk;
-        double la, lo, zm, dx, dy, sc, ax, ay, mlat, mlon;
+        bool ctr, mset, trk, brgDirty;
+        double la, lo, zm, dx, dy, sc, ax, ay, mlat, mlon, brg;
         std::vector<std::pair<double, double>> trackPts;
         uint64_t gen;
         {
             std::unique_lock<std::mutex> lk(s.m);
             s.cv.wait(lk, [&] {
                 return s.centerDirty || s.renderDirty || s.dx != 0 ||
-                       s.dy != 0 || s.scale != 1.0 || s.trackDirty;
+                       s.dy != 0 || s.scale != 1.0 || s.trackDirty ||
+                       s.bearingDirty;
             });
             gen = s.cmdGen;
             trk = s.trackDirty;
             s.trackDirty = false;
             if (trk) trackPts = s.track;
+            brgDirty = s.bearingDirty;
+            s.bearingDirty = false;
+            brg = s.bearing;
             ctr = s.centerDirty;
             s.centerDirty = false;
             s.renderDirty = false;
@@ -223,9 +229,13 @@ void threadMain() {
             mlat = s.markerLat;
             mlon = s.markerLon;
         }
-        if (ctr) {
-            auto cam = mln::CameraOptions().withCenter(mln::LatLng{la, lo});
-            if (zm > 0) cam.withZoom(zm);
+        if (ctr || brgDirty) {
+            mln::CameraOptions cam;
+            if (ctr) {
+                cam.withCenter(mln::LatLng{la, lo});
+                if (zm > 0) cam.withZoom(zm);
+            }
+            if (brgDirty) cam.withBearing(brg);
             map.jumpTo(cam);
         }
         if (sc != 1.0)
@@ -440,6 +450,17 @@ void zoom_step(int delta) {
     double ax = (s.widthPx / s.ratio) / 2.0;
     double ay = (s.heightPx / s.ratio) / 2.0;
     scale_by(delta > 0 ? 2.0 : 0.5, ax, ay);
+}
+
+void set_bearing(double deg) {
+    auto &s = svc();
+    {
+        std::lock_guard<std::mutex> lk(s.m);
+        s.bearing = deg;
+        s.bearingDirty = true;
+        ++s.cmdGen;
+    }
+    s.cv.notify_one();
 }
 
 void poke() {

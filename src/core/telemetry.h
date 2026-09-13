@@ -16,6 +16,7 @@ struct Sample {
     std::optional<int> heart_rate;   // mock synthesizes; GPS era: nullopt
     std::optional<int> cadence;      // mock derives; GPS era: nullopt
     std::optional<double> altitude_m; // GPS altitude / mock hills
+    std::optional<double> heading_deg; // course over ground, 0..360, N=0
 };
 
 class TelemetrySource {

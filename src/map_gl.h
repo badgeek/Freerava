@@ -59,6 +59,9 @@ uint64_t scale_by(double factor, double ax, double ay);
 // +/- buttons: one zoom level in/out around the map centre.
 void zoom_step(int delta);
 
+// Heading-up mode: rotate the camera so `deg` points up (0 = north-up).
+void set_bearing(double deg);
+
 // Re-render with the current camera (used when a frame had to be dropped
 // because the UI textures weren't imported yet).
 void poke();

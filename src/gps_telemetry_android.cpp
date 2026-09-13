@@ -233,6 +233,10 @@ void AndroidTelemetrySource::poll() {
             e->CallBooleanMethod(loc, e->GetMethodID(locCls, "hasAltitude", "()Z"));
         double alt_m =
             has_alt ? e->CallDoubleMethod(loc, e->GetMethodID(locCls, "getAltitude", "()D")) : 0.0;
+        jboolean has_brg =
+            e->CallBooleanMethod(loc, e->GetMethodID(locCls, "hasBearing", "()Z"));
+        double brg =
+            has_brg ? e->CallFloatMethod(loc, e->GetMethodID(locCls, "getBearing", "()F")) : 0.0;
         if (cleared(e)) break;
 
         jclass sysCls = e->FindClass("java/lang/System");
@@ -268,6 +272,26 @@ void AndroidTelemetrySource::poll() {
             } else {
                 speed_kmh_ = 0.0;
             }
+            // Course over ground: the fix's own bearing when it carries a
+            // real one. Like hasSpeed(), the emulator reports hasBearing()
+            // with a hard 0 — treat 0 as "unknown" and compute the course
+            // from the movement since the last accepted fix instead.
+            if (has_brg && brg > 0.0) {
+                course_deg_ = brg;
+                have_course_ = true;
+            } else if (have_prev_ &&
+                       haversine_m(prev_lat_, prev_lon_, lat, lon) >
+                           kJitterFloorM) {
+                double la1 = prev_lat_ * M_PI / 180.0;
+                double la2 = lat * M_PI / 180.0;
+                double dlo = (lon - prev_lon_) * M_PI / 180.0;
+                double y = std::sin(dlo) * std::cos(la2);
+                double x = std::cos(la1) * std::sin(la2) -
+                           std::sin(la1) * std::cos(la2) * std::cos(dlo);
+                double c = std::atan2(y, x) * 180.0 / M_PI;
+                course_deg_ = c < 0 ? c + 360.0 : c;
+                have_course_ = true;
+            }
             prev_lat_ = lat;
             prev_lon_ = lon;
             prev_time_ms_ = t_ms;
@@ -295,6 +319,7 @@ core::Sample AndroidTelemetrySource::sample(double) {
     s.lat = lat_;
     s.lon = lon_;
     if (have_alt_) s.altitude_m = alt_m_;
+    if (have_course_) s.heading_deg = course_deg_;
     // No heart-rate or cadence sensors yet — the UI renders these as "--".
     return s;
 }

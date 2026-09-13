@@ -12,6 +12,7 @@
 #include "core/track.h"
 
 #ifdef __ANDROID__
+#include "compass_android.h"
 #include <sys/stat.h>
 #endif
 
@@ -258,18 +259,27 @@ int main(int, char **)
         w.set_screen(3);
     });
 
+    // Heading-up mode flag (toggled from the MAP screen; also drives the
+    // replay flyover). last_course remembers the GPS course; last_sent
+    // throttles bearing updates.
+    auto heading_up = std::make_shared<bool>(false);
+    auto last_course = std::make_shared<std::optional<double>>();
+    auto last_sent_bearing = std::make_shared<double>(-999.0);
+
     // ---- Ride replay (detail page, MAP tab) ----
     struct Replay {
         std::vector<core::TrackPoint> trk;
         double t = 0, total = 0;
         int speedIdx = 1; // 10x / 30x / 60x
+        double lastLat = 0, lastLon = 0, lastBearing = 0;
+        bool haveLast = false;
     };
     static constexpr int kReplaySpeeds[3] = {10, 30, 60};
     auto rp = std::make_shared<Replay>();
     static slint::Timer replay_timer;
 
     auto replay_tick = [ui = slint::ComponentWeakHandle(ui), rp,
-                        replay_active] {
+                        replay_active, heading_up] {
         auto u = ui.lock();
         if (!u) return;
         auto &w = **u;
@@ -293,6 +303,28 @@ int main(int, char **)
         }
 #if defined(CYCLOMP_MAP_GL)
         mapgl::set_marker(lat, lon);
+        // Flyover: with heading-up on, rotate along the replayed course.
+        if (*heading_up && rp->haveLast) {
+            double la1 = rp->lastLat * M_PI / 180.0;
+            double la2 = lat * M_PI / 180.0;
+            double dlo = (lon - rp->lastLon) * M_PI / 180.0;
+            double yb = std::sin(dlo) * std::cos(la2);
+            double xb = std::cos(la1) * std::sin(la2) -
+                        std::sin(la1) * std::cos(la2) * std::cos(dlo);
+            if (yb != 0.0 || xb != 0.0) {
+                double c = std::atan2(yb, xb) * 180.0 / M_PI;
+                if (c < 0) c += 360.0;
+                double d = std::fabs(c - rp->lastBearing);
+                if (d > 180.0) d = 360.0 - d;
+                if (d > 5.0) { // throttle small wiggles
+                    mapgl::set_bearing(c);
+                    rp->lastBearing = c;
+                }
+            }
+        }
+        rp->lastLat = lat;
+        rp->lastLon = lon;
+        rp->haveLast = true;
         double nx, ny, aspect;
         if (mapgl::marker_offset(nx, ny, aspect)) {
             w.set_marker_nx((float)nx);
@@ -329,6 +361,8 @@ int main(int, char **)
         rp->trk = rows[i].track;
         rp->total = rp->trk.empty() ? 0.0 : (double)rp->trk.back().t_s;
         rp->t = 0;
+        rp->haveLast = false;
+        rp->lastBearing = 0;
 #if defined(CYCLOMP_MAP_GL)
         if (rp->trk.size() >= 2) {
             std::vector<std::pair<double, double>> pts;
@@ -395,6 +429,7 @@ int main(int, char **)
         (*u)->set_replay_playing(false);
         (*u)->set_screen(2);
 #if defined(CYCLOMP_MAP_GL)
+        mapgl::set_bearing(0); // leave the detail page north-up
         double la, lo;
         if (current_position(la, lo)) mapgl::set_marker(la, lo);
 #else
@@ -538,6 +573,21 @@ int main(int, char **)
     // During the pinch only the Slint-side preview moves (60fps); mbgl gets
     // ONE scale_by on commit. renderStill blocks until every tile of the new
     // zoom level is ready, which made per-update commits stutter.
+    // Heading-up: rotate the camera to the bike's course while following.
+    ui->on_map_heading_toggle([ui = slint::ComponentWeakHandle(ui),
+                               heading_up] {
+        auto u = ui.lock();
+        if (!u) return;
+        *heading_up = !*heading_up;
+        (*u)->set_map_heading_up(*heading_up);
+#if defined(CYCLOMP_MAP_GL)
+        if (!*heading_up) mapgl::set_bearing(0); // back to north-up
+#ifdef __ANDROID__
+        if (*heading_up) compass::start();
+#endif
+#endif
+    });
+
     ui->on_map_pinch_begin([ui = slint::ComponentWeakHandle(ui), camera] {
         camera->release();
         if (auto u = ui.lock()) (*u)->set_map_following(false);
@@ -606,7 +656,8 @@ int main(int, char **)
     static slint::Timer timer;
     timer.start(slint::TimerMode::Repeated, std::chrono::milliseconds(500),
         [ui = slint::ComponentWeakHandle(ui), source, engine, camera, cam_sink,
-         sensors, publish_nav, publish_marker, recorder] {
+         sensors, publish_nav, publish_marker, recorder, heading_up,
+         last_course, last_sent_bearing, replay_active] {
             auto u = ui.lock();
             if (!u) return;
             auto &w = **u;
@@ -614,6 +665,30 @@ int main(int, char **)
             // the ride starts.
             publish_nav(w);
             publish_marker(w);
+#if defined(CYCLOMP_MAP_GL) && defined(__ANDROID__)
+            // Heading-up: compass while slow or stopped, GPS course once
+            // moving briskly. Runs even outside a ride; paused during
+            // replays (the flyover owns the bearing there).
+            if (*heading_up && !replay_active->load()) {
+                std::optional<double> hdg;
+                if (engine->state() == core::RideState::Running &&
+                    engine->live().speed_kmh > 7.0 && *last_course)
+                    hdg = **last_course;
+                else {
+                    double az;
+                    if (compass::azimuth_deg(az)) hdg = az;
+                    else if (*last_course) hdg = **last_course;
+                }
+                if (hdg) {
+                    double d = std::fabs(*hdg - *last_sent_bearing);
+                    if (d > 180.0) d = 360.0 - d;
+                    if (d > 3.0) {
+                        mapgl::set_bearing(*hdg);
+                        *last_sent_bearing = *hdg;
+                    }
+                }
+            }
+#endif
             if (engine->state() != core::RideState::Running) return;
             auto s = source->sample(0.5);
             engine->tick(0.5, s);
@@ -643,6 +718,7 @@ int main(int, char **)
                             core::elevation_gain_m(recorder->points())) +
                         " m"));
                 }
+                if (s.heading_deg) *last_course = *s.heading_deg;
                 if (auto up = camera->on_position(s.lat, s.lon)) cam_sink(*up);
             }
         });

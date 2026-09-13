@@ -71,6 +71,8 @@ private:
     double speed_kmh_ = 0;
     bool have_alt_ = false;
     double alt_m_ = 0;
+    bool have_course_ = false;
+    double course_deg_ = 0;
     long long fix_time_ms_ = 0;
     long long fix_age_ms_ = 0;
 

@@ -32,6 +32,9 @@ Sample MockTelemetrySource::sample(double dt_s) {
     s.lat = lat_;
     s.lon = lon_;
     s.altitude_m = alt_m_;
+    double hdg = std::fmod(heading_deg_, 360.0);
+    if (hdg < 0) hdg += 360.0;
+    s.heading_deg = hdg;
     // Heart rate tracks effort with jitter; cadence derives from speed.
     s.heart_rate = (int)std::lround(90 + speed_ * 1.9 + rng_.centered() * 6.f);
     s.cadence = speed_ > 0 ? (int)std::lround(speed_ * 2.4 + 12) : 0;

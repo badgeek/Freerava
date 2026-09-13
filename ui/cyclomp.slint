@@ -200,6 +200,9 @@ export component AppWindow inherits Window {
     in property <bool> marker-valid: true;
     // Camera locked onto the rider (released by pan/pinch, retaken by LOCATE).
     in property <bool> map-following: true;
+    // Heading-up mode: the map rotates so the bike's course points up.
+    in property <bool> map-heading-up: false;
+    callback map-heading-toggle();
 
     callback toggle-ride();  // idle->start, running->pause, paused->resume
     callback stop-ride();    // finalize + save session
@@ -516,13 +519,27 @@ export component AppWindow inherits Window {
                 }
             }
 
-            // Map controls: locate, then zoom.
+            // Map controls: compass, locate, then zoom.
             if root.map-available : VerticalLayout {
                 x: parent.width - 56px;
-                y: parent.height - 172px;
+                y: parent.height - 224px;
                 width: 48px;
-                height: 156px;
+                height: 208px;
                 spacing: 4px;
+                // COMPASS: toggle north-up ("N") vs heading-up ("▲", yellow).
+                Rectangle {
+                    background: Palette.ink;
+                    TouchArea { clicked => { root.map-heading-toggle(); } }
+                    Text {
+                        text: root.map-heading-up ? "▲" : "N";
+                        color: root.map-heading-up ? Palette.yellow
+                                                   : Palette.paper;
+                        font-size: 18px;
+                        font-weight: 900;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
                 // LOCATE: recentre on the rider and relock the camera. Turns
                 // yellow while the camera is following.
                 Rectangle {
