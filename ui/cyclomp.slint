@@ -63,7 +63,7 @@ component MetricTile inherits Rectangle {
     }
 }
 
-// Turn-by-turn nav strip. Geometric arrow drawn with a Path.
+// Status strip: GPS state on Android, mock nav on desktop.
 component NavStrip inherits Rectangle {
     in property <string> instruction;
     in property <string> distance;
@@ -73,17 +73,6 @@ component NavStrip inherits Rectangle {
         padding: 16px;
         spacing: 16px;
         alignment: start;
-        // bold right-turn chevron
-        Rectangle {
-            width: 44px;
-            height: 44px;
-            y: (parent.height - self.height) / 2;
-            Path {
-                fill: Palette.ink;
-                commands: "M 10 30 L 30 30 L 30 12 L 44 32 L 30 52 L 30 40 L 10 40 Z";
-                viewbox-x: 0; viewbox-y: 0; viewbox-width: 54; viewbox-height: 64;
-            }
-        }
         VerticalLayout {
             alignment: center;
             spacing: 2px;
