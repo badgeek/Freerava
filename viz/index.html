@@ -36,6 +36,12 @@
   #app { position: fixed; inset: 0; }
   canvas { display: block; }
 
+  /* Subtle corner falloff, so the specimen sits in a studio-lit space
+     rather than on a flat fill. Never intercepts pointer events. */
+  #vignette { position: fixed; inset: 0; pointer-events: none; z-index: 1;
+    background: radial-gradient(ellipse 75% 65% at 50% 42%,
+      rgba(0,0,0,0) 55%, rgba(28,32,44,.055) 78%, rgba(28,32,44,.13) 100%); }
+
   /* ---- Header: brand + ride title + stat row ---- */
   header { position: fixed; top: 0; left: 0; right: 0; background: var(--card);
     border-bottom: 1px solid var(--border); z-index: 3; }
@@ -121,6 +127,7 @@
 </head>
 <body>
 <div id="app"></div>
+<div id="vignette"></div>
 
 <header style="display:none" id="header">
   <div class="head-inner">
@@ -202,7 +209,7 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(COL.bg);
 // Range is set from the ride's own size in frameCamera() — fixed distances
 // fogged a multi-kilometre ride out completely.
-scene.fog = new THREE.Fog(COL.bg, 1e6, 2e6);
+scene.fog = new THREE.Fog(0xf2f4f7, 1e6, 2e6); // matched to the horizon band
 
 const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 20000);
 camera.position.set(300, 320, 480);
@@ -222,6 +229,54 @@ scene.add(grid);
 // That keeps the draped map at its true colours and sidesteps three's
 // r155+ physical-light-units migration entirely.
 
+// ---- backdrop: a soft studio gradient dome ----
+// An inverted sphere pinned to the camera, so it can never be clipped by the
+// far plane or orbited "out of". fog: false keeps the haze off the sky
+// itself; its scale is set from the ride's size in frameCamera().
+function skyTexture() {
+  const c = document.createElement('canvas');
+  c.width = 2; c.height = 256;
+  const x = c.getContext('2d');
+  const grad = x.createLinearGradient(0, 0, 0, 256);
+  grad.addColorStop(0.00, '#d3dcea'); // zenith, cool
+  grad.addColorStop(0.42, '#e7ecf3');
+  grad.addColorStop(0.60, '#f7f8fa'); // horizon glow
+  grad.addColorStop(0.78, '#e9ebef');
+  grad.addColorStop(1.00, '#dcdfe5'); // below the horizon
+  x.fillStyle = grad; x.fillRect(0, 0, 2, 256);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+const sky = new THREE.Mesh(
+  new THREE.SphereGeometry(1, 32, 20),
+  new THREE.MeshBasicMaterial({ map: skyTexture(), side: THREE.BackSide,
+                                fog: false, depthWrite: false }));
+sky.renderOrder = -1;
+sky.scale.setScalar(5000);
+scene.add(sky);
+
+// Soft contact shadow under the block — it reads as a solid object sitting
+// in a space instead of a slab hanging in a void. The camera is clamped
+// above the horizon (maxPolarAngle), so it is never seen from underneath.
+function shadowTexture() {
+  const s = 256;
+  const c = document.createElement('canvas');
+  c.width = c.height = s;
+  const x = c.getContext('2d');
+  const grad = x.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+  grad.addColorStop(0.00, 'rgba(26,30,42,0.42)');
+  grad.addColorStop(0.45, 'rgba(26,30,42,0.22)');
+  grad.addColorStop(0.75, 'rgba(26,30,42,0.06)');
+  grad.addColorStop(1.00, 'rgba(26,30,42,0)');
+  x.fillStyle = grad; x.fillRect(0, 0, s, s);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+let _shadowTex = null;
+const shadowTex = () => _shadowTex || (_shadowTex = shadowTexture());
+
 // ---- ride state ----
 let ride = null;
 let playing = false, headT = 1, follow = false, exag = 12;
@@ -235,7 +290,8 @@ function disposeObj(o) {
 function clearRide() {
   if (!ride) return;
   for (const o of [ride.route, ride.curtain, ride.head, ride.startDot,
-                   ride.endDot, ride.terrain, ride.skirt, ride.cap, ride.slab])
+                   ride.endDot, ride.terrain, ride.skirt, ride.cap,
+                   ride.shadow, ride.slab])
     disposeObj(o);
   grid.visible = true;
   document.getElementById('attrib').style.display = 'none';
@@ -574,8 +630,8 @@ function refreshTerrain(g) {
     if (!m) return;
     g.slab.remove(m); m.geometry?.dispose?.(); m.material?.dispose?.();
   };
-  kill(g.terrain); kill(g.skirt); kill(g.cap);
-  g.terrain = g.skirt = g.cap = null;
+  kill(g.terrain); kill(g.skirt); kill(g.cap); kill(g.shadow);
+  g.terrain = g.skirt = g.cap = g.shadow = null;
 
   const { xW, xE, zN, zS, w, d, thick } = g.slabX;
   const cx = (xW + xE) / 2, cz = (zN + zS) / 2;
@@ -650,6 +706,16 @@ function refreshTerrain(g) {
   g.cap = new THREE.Mesh(capGeo, new THREE.MeshBasicMaterial({ color: 0x4a3628 }));
   g.cap.position.set(cx, bottom, cz);
   g.slab.add(g.cap);
+
+  // ---- contact shadow, cast a little off-axis from the key light ----
+  const shGeo = new THREE.PlaneGeometry(Math.max(w, d) * 1.9, Math.max(w, d) * 1.9);
+  shGeo.rotateX(-Math.PI / 2);
+  g.shadow = new THREE.Mesh(shGeo, new THREE.MeshBasicMaterial({
+    map: shadowTex(), transparent: true, depthWrite: false, fog: false }));
+  g.shadow.renderOrder = -0.5;
+  g.shadow.position.set(cx + w * 0.06, bottom - Math.max(4, thick * 0.12),
+                        cz + d * 0.05);
+  g.slab.add(g.shadow);
 }
 
 async function buildSlab(g) {
@@ -739,6 +805,7 @@ function frameCamera() {
   ride.chaseDist = Math.min(1600, Math.max(160, d * 0.22));
   controls.minDistance = Math.max(25, d / 400);
   controls.maxDistance = d * 6;
+  sky.scale.setScalar(d * 12); // comfortably inside camera.far (d * 40)
 }
 
 // Reveal + head position, driven by time fraction 0..1.
@@ -884,6 +951,7 @@ function animate(now) {
     setProgress(headT);
   }
   controls.update();
+  sky.position.copy(camera.position); // dome rides along, never clips
   renderer.render(scene, camera);
 }
 requestAnimationFrame(animate);
