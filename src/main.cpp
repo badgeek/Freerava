@@ -18,6 +18,9 @@
 #include "map_gl.h"
 #include <android/log.h>
 #endif
+#ifdef __ANDROID__
+#include "gps_telemetry_android.h"
+#endif
 
 #include <algorithm>
 #include <cctype>
@@ -41,16 +44,17 @@ slint::SharedString date_label() {
     return slint::SharedString(core::fmt::date_label(std::time(nullptr)));
 }
 
-// Push the engine's live values into the UI.
-void publish_live(AppWindow &w, const core::LiveStats &m, int nav_m) {
+// Push the engine's live values into the UI. `sensors` is false when the
+// source has no cadence/heart-rate channel (real GPS) — the tiles then read
+// "--" instead of a fabricated number.
+void publish_live(AppWindow &w, const core::LiveStats &m, bool sensors) {
     w.set_speed((float)m.speed_kmh);
     w.set_distance(fmt1((float)m.dist_km));
     w.set_ride_time(mmss((int)m.elapsed_s));
     w.set_avg_speed((float)m.avg_kmh);
-    w.set_cadence(m.cadence);
-    w.set_heart_rate(m.heart_rate);
-    w.set_hr_zone(core::hr_zone(m.heart_rate));
-    w.set_nav_distance(metres(nav_m));
+    w.set_cadence(sensors ? m.cadence : -1);
+    w.set_heart_rate(sensors ? m.heart_rate : -1);
+    w.set_hr_zone(sensors ? core::hr_zone(m.heart_rate) : 0);
 }
 
 // The only place session numbers become strings.
@@ -67,15 +71,14 @@ SessionRow to_row(const core::SessionSummary &s) {
 }
 
 // Reset the live view to a resting/idle state.
-void publish_idle(AppWindow &w) {
+void publish_idle(AppWindow &w, bool sensors) {
     w.set_speed(0.f);
     w.set_distance(slint::SharedString("0.0"));
     w.set_ride_time(slint::SharedString("00:00"));
     w.set_avg_speed(0.f);
-    w.set_cadence(0);
-    w.set_heart_rate(72);
-    w.set_hr_zone(1);
-    w.set_nav_distance(slint::SharedString("400 m"));
+    w.set_cadence(sensors ? 0 : -1);
+    w.set_heart_rate(sensors ? 72 : -1);
+    w.set_hr_zone(sensors ? 1 : 0);
 }
 
 } // namespace
@@ -125,14 +128,50 @@ int main(int, char **)
 #endif
 {
     auto ui = AppWindow::create();
-    auto source = std::make_shared<core::MockTelemetrySource>();
+
+    // Telemetry: real GPS on Android, the RNG mock everywhere else.
+    // CYCLOMP_MOCK_RIDE=1 forces the mock on Android too (demo mode).
+    std::shared_ptr<core::MockTelemetrySource> mock;
+    std::shared_ptr<core::TelemetrySource> source;
+#ifdef __ANDROID__
+    std::shared_ptr<gps::AndroidTelemetrySource> gps_source;
+    const char *mock_env = std::getenv("CYCLOMP_MOCK_RIDE");
+    if (!(mock_env && mock_env[0] == '1')) {
+        gps_source = std::make_shared<gps::AndroidTelemetrySource>();
+        source = gps_source;
+    }
+#endif
+    if (!source) {
+        mock = std::make_shared<core::MockTelemetrySource>();
+        source = mock;
+    }
+    // Cadence and heart rate exist only in the mock; GPS leaves them nullopt.
+    const bool sensors = mock != nullptr;
+
+    // The nav strip carries the mock's turn countdown, or the GPS fix status.
+    std::function<void(AppWindow &)> publish_nav = [](AppWindow &) {};
+    if (mock) {
+        publish_nav = [mock](AppWindow &w) { w.set_nav_distance(metres(mock->nav_m())); };
+    }
+#ifdef __ANDROID__
+    if (gps_source) {
+        publish_nav = [gps_source](AppWindow &w) {
+            gps_source->poll(); // rate limited internally
+            auto st = gps_source->status();
+            w.set_nav_distance(slint::SharedString(st.distance));
+            w.set_nav_instruction(slint::SharedString(st.instruction));
+        };
+    }
+#endif
+
     auto engine = std::make_shared<core::RideEngine>();
     auto log = std::make_shared<core::SessionLog>();
 
     // History of finished rides, newest first. In-memory for the mock.
     auto sessions = std::make_shared<slint::VectorModel<SessionRow>>();
     ui->set_sessions(sessions);
-    publish_idle(*ui);
+    publish_idle(*ui, sensors);
+    publish_nav(*ui);
 
     // Debug: start on a given screen (0 ride / 1 map / 2 history).
     if (const char *s = std::getenv("CYCLOMP_SCREEN"))
@@ -211,16 +250,18 @@ int main(int, char **)
                                 up.zoom < 0 ? camera->zoom() : up.zoom);
     };
 #endif
-    // Initial camera placement (consumes FollowCamera's first-fire).
-    if (auto up = camera->on_position(source->lat(), source->lon()))
-        cam_sink(*up);
+    // Initial camera placement (consumes FollowCamera's first-fire). With real
+    // GPS there is nowhere to point yet — the first valid sample fires it.
+    if (mock) {
+        if (auto up = camera->on_position(mock->lat(), mock->lon())) cam_sink(*up);
+    }
 
     ui->on_map_zoom([=](int delta) {
 #if defined(CYCLOMP_MAP_GL)
         mapgl::zoom_step(delta);
 #elif defined(CYCLOMP_HAVE_MAPLIBRE)
-        if (map_service)
-            map_service->set_camera(source->lat(), source->lon(),
+        if (map_service && mock)
+            map_service->set_camera(mock->lat(), mock->lon(),
                                     camera->adjust_zoom(delta));
 #else
         (void)delta;
@@ -246,14 +287,22 @@ int main(int, char **)
 
     // idle -> start (fresh session) | running -> pause | paused -> resume.
     // The engine owns the state machine; the UI property just mirrors it.
+    // Real GPS needs the runtime permission; the first START RIDE asks for it.
+    std::function<void()> on_ride_start = [] {};
+#ifdef __ANDROID__
+    if (gps_source) on_ride_start = [gps_source] { gps_source->request_permission(); };
+#endif
     ui->on_toggle_ride(
-        [ui = slint::ComponentWeakHandle(ui), source, engine, camera] {
+        [ui = slint::ComponentWeakHandle(ui), mock, engine, camera, sensors,
+         publish_nav, on_ride_start] {
             auto u = ui.lock();
             if (!u) return;
             auto &w = **u;
             if (engine->state() == core::RideState::Idle) {
-                source->reset_ride();
-                publish_idle(w);
+                on_ride_start();
+                if (mock) mock->reset_ride();
+                publish_idle(w, sensors);
+                publish_nav(w);
                 camera->relock(); // camera back onto the rider
             }
             w.set_ride_state((int)engine->toggle());
@@ -261,7 +310,8 @@ int main(int, char **)
 
     // Finalize the ride: save a summary row, then return to idle.
     ui->on_stop_ride(
-        [ui = slint::ComponentWeakHandle(ui), engine, log, sessions] {
+        [ui = slint::ComponentWeakHandle(ui), engine, log, sessions, sensors,
+         publish_nav] {
             auto u = ui.lock();
             if (!u) return;
             auto &w = **u;
@@ -270,7 +320,8 @@ int main(int, char **)
                 log->add(*s);
                 sessions->insert(0, to_row(*s)); // newest first
             }
-            publish_idle(w);
+            publish_idle(w, sensors);
+            publish_nav(w);
             w.set_selected_session(-1);
             w.set_ride_state((int)engine->state());
         });
@@ -278,16 +329,19 @@ int main(int, char **)
     // ~500 ms telemetry tick; only advances while RUNNING (pause freezes all).
     static slint::Timer timer;
     timer.start(slint::TimerMode::Repeated, std::chrono::milliseconds(500),
-        [ui = slint::ComponentWeakHandle(ui), source, engine, camera,
-         cam_sink] {
+        [ui = slint::ComponentWeakHandle(ui), source, engine, camera, cam_sink,
+         sensors, publish_nav] {
             auto u = ui.lock();
             if (!u) return;
             auto &w = **u;
+            // Keeps the GPS status strip live even before the ride starts.
+            publish_nav(w);
             if (engine->state() != core::RideState::Running) return;
             auto s = source->sample(0.5);
             engine->tick(0.5, s);
-            publish_live(w, engine->live(), source->nav_m());
-            if (auto up = camera->on_position(s.lat, s.lon)) cam_sink(*up);
+            publish_live(w, engine->live(), sensors);
+            if (s.valid)
+                if (auto up = camera->on_position(s.lat, s.lon)) cam_sink(*up);
         });
 
 #if defined(CYCLOMP_MAP_GL)

@@ -282,14 +282,15 @@ export component AppWindow inherits Window {
                 MetricTile {
                     horizontal-stretch: 1;
                     label: "CADENCE";
-                    value: root.cadence;
+                    // Negative = no such sensor on this source (real GPS).
+                    value: root.cadence < 0 ? "--" : root.cadence;
                     unit: "rpm";
                     accent: Palette.blue;
                 }
                 MetricTile {
                     horizontal-stretch: 1;
-                    label: "HEART  Z\{root.hr-zone}";
-                    value: root.heart-rate;
+                    label: root.hr-zone > 0 ? "HEART  Z\{root.hr-zone}" : "HEART";
+                    value: root.heart-rate < 0 ? "--" : root.heart-rate;
                     unit: "bpm";
                     accent: root.hr-color;
                 }
