@@ -109,6 +109,7 @@ void publish_settings(AppWindow &w, const core::Settings &s) {
     w.set_set_tunnel_base_value(fmt1((float)s.tunnel_base));
     w.set_set_tunnel_cap_value(fmt1((float)s.tunnel_cap));
     w.set_set_tunnel_fps_value(fmt0((float)s.tunnel_fps));
+    w.set_set_compass_rate_value(fmt1((float)s.compass_interval_s));
     w.set_set_tunnel_on_value(slint::SharedString(s.tunnel_enabled ? "ON" : "OFF"));
     w.set_set_mock_value(slint::SharedString(s.mock_ride ? "ON" : "OFF"));
     // The tunnel animation consumes the numeric values directly.
@@ -300,6 +301,8 @@ int main(int, char **)
     auto heading_up = std::make_shared<bool>(false);
     auto last_course = std::make_shared<std::optional<double>>();
     auto last_sent_bearing = std::make_shared<double>(-999.0);
+    // Seconds since the last rotation sent to the map (compass rate limit).
+    auto compass_elapsed = std::make_shared<double>(0.0);
 
     // ---- Ride replay (detail page, MAP tab) ----
     struct Replay {
@@ -644,6 +647,11 @@ int main(int, char **)
             settings->tunnel_enabled =
                 dir == 0 ? def.tunnel_enabled : !settings->tunnel_enabled;
             break;
+        case 8:
+            settings->compass_interval_s =
+                dir == 0 ? def.compass_interval_s
+                         : settings->compass_interval_s + dir * 0.5;
+            break;
         }
         apply_settings(id == 0);
     });
@@ -762,7 +770,8 @@ int main(int, char **)
         [ui = slint::ComponentWeakHandle(ui), source, engine, camera, cam_sink,
          sensors, publish_nav, publish_marker, recorder, heading_up,
          last_course, last_sent_bearing, replay_active, current_position,
-         settings] {
+         settings, compass_elapsed] {
+            (void)compass_elapsed;
             (void)settings; // consumed only in the Android heading-up block
             auto u = ui.lock();
             if (!u) return;
@@ -784,6 +793,7 @@ int main(int, char **)
             // moving briskly. Runs even outside a ride; paused during
             // replays (the flyover owns the bearing there).
             if (*heading_up && !replay_active->load()) {
+                *compass_elapsed += 0.5; // one tick
                 std::optional<double> hdg;
                 if (engine->state() == core::RideState::Running &&
                     engine->live().speed_kmh > settings->heading_speed_kmh &&
@@ -798,10 +808,15 @@ int main(int, char **)
                     double d = std::fmod(std::fabs(*hdg - *last_sent_bearing),
                                          360.0);
                     if (d > 180.0) d = 360.0 - d;
-                    if (d > settings->bearing_min_delta_deg ||
-                        *last_sent_bearing < -500.0) {
+                    // Rotate only when the change is big enough AND the
+                    // user-tuned interval has passed (first fix bypasses).
+                    bool first = *last_sent_bearing < -500.0;
+                    if (first ||
+                        (d > settings->bearing_min_delta_deg &&
+                         *compass_elapsed >= settings->compass_interval_s)) {
                         mapgl::set_bearing(*hdg);
                         *last_sent_bearing = *hdg;
+                        *compass_elapsed = 0.0;
                     }
                 }
             }

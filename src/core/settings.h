@@ -21,6 +21,9 @@ struct Settings {
     double tunnel_fps = 30.0;
     // Master switch for the tunnel animation.
     bool tunnel_enabled = true;
+    // Heading-up: minimum seconds between map rotations (the telemetry
+    // tick runs at 0.5 s, so effective values are multiples of that).
+    double compass_interval_s = 0.5;
     // Use the fake ride on Android too (applied at next launch).
     bool mock_ride = false;
 };

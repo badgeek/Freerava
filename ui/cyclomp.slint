@@ -140,21 +140,14 @@ component ConsoleHeader inherits Rectangle {
     in property <string> title;
     in property <string> status;    // amber module (GPS / count)
     in property <string> status2;   // dim module (detail line)
-    height: 104px;
+    height: 88px;
     background: Palette.ink;
     VerticalLayout {
         VerticalLayout {
             padding-left: 12px;
             padding-right: 64px; // clear of the sticky gear button
-            padding-top: 6px;
+            padding-top: 8px;
             spacing: 5px;
-            Text {
-                text: "WEYLAND-YUTANI CORP // ROUTE SYSTEMS";
-                color: Palette.dim;
-                font-size: 9px;
-                font-weight: 700;
-                letter-spacing: 2px;
-            }
             // Title module.
             Rectangle {
                 height: 38px;
@@ -425,6 +418,7 @@ export component AppWindow inherits Window {
     in property <string> set-tunnel-cap-value: "1.0";
     in property <string> set-tunnel-fps-value: "30";
     in property <string> set-tunnel-on-value: "ON";
+    in property <string> set-compass-rate-value: "0.5";
     in property <string> set-mock-value: "OFF";
     // Numeric tunnel parameters for the dashboard animation.
     in property <float> tunnel-base: 0.3;   // cycles/s at rest
@@ -1342,31 +1336,24 @@ export component AppWindow inherits Window {
                             width: 52px;
                             pressed => { root.screen = root.prev-screen; }
                         }
-                        VerticalLayout {
+                        Text {
                             horizontal-stretch: 1;
-                            alignment: center;
-                            spacing: 2px;
-                            Text {
-                                text: "MU-TH-UR // OVERRIDES";
-                                color: Palette.dim;
-                                font-size: 9px;
-                                font-weight: 700;
-                                letter-spacing: 2px;
-                            }
-                            Text {
-                                text: "SYSTEM PARAMETERS";
-                                color: Palette.phos;
-                                font-size: 20px;
-                                font-weight: 900;
-                                letter-spacing: 2px;
-                            }
+                            text: "SYSTEM PARAMETERS";
+                            color: Palette.phos;
+                            font-size: 20px;
+                            font-weight: 900;
+                            letter-spacing: 2px;
+                            vertical-alignment: center;
                         }
                     }
                     Rectangle { height: 1px; background: Palette.line; }
                 }
             }
 
-            VerticalLayout {
+            // More parameters than fit one screen: scrollable console list.
+            Flickable {
+                vertical-stretch: 1;
+                VerticalLayout {
                 padding: 12px;
                 spacing: 10px;
                 SettingRow {
@@ -1410,6 +1397,14 @@ export component AppWindow inherits Window {
                     reset => { root.setting-adjust(5, 0); }
                 }
                 SettingRow {
+                    label: "COMPASS RATE  S";
+                    value: root.set-compass-rate-value;
+                    default-value: "0.5";
+                    minus => { root.setting-adjust(8, -1); }
+                    plus => { root.setting-adjust(8, 1); }
+                    reset => { root.setting-adjust(8, 0); }
+                }
+                SettingRow {
                     label: "TUNNEL FPS";
                     value: root.set-tunnel-fps-value;
                     default-value: "30";
@@ -1442,9 +1437,8 @@ export component AppWindow inherits Window {
                         pressed => { root.settings-reset(); }
                     }
                 }
+                }
             }
-
-            Rectangle { vertical-stretch: 1; background: Palette.ink; }
         }
 
         // ---- Command bar: RIDE | MAP | LOG ----
