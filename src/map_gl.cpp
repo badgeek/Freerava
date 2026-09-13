@@ -453,6 +453,7 @@ void zoom_step(int delta) {
 }
 
 void set_bearing(double deg) {
+    MAPGL_LOG("bearing -> %.0f", deg);
     auto &s = svc();
     {
         std::lock_guard<std::mutex> lk(s.m);

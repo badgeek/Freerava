@@ -579,6 +579,10 @@ int main(int, char **)
         auto u = ui.lock();
         if (!u) return;
         *heading_up = !*heading_up;
+#if defined(__ANDROID__)
+        __android_log_print(ANDROID_LOG_INFO, "cyclomp-compass",
+                            "heading-up toggled %s", *heading_up ? "ON" : "OFF");
+#endif
         (*u)->set_map_heading_up(*heading_up);
 #if defined(CYCLOMP_MAP_GL)
         if (!*heading_up) mapgl::set_bearing(0); // back to north-up
@@ -680,9 +684,10 @@ int main(int, char **)
                     else if (*last_course) hdg = **last_course;
                 }
                 if (hdg) {
-                    double d = std::fabs(*hdg - *last_sent_bearing);
+                    double d = std::fmod(std::fabs(*hdg - *last_sent_bearing),
+                                         360.0);
                     if (d > 180.0) d = 360.0 - d;
-                    if (d > 3.0) {
+                    if (d > 3.0 || *last_sent_bearing < -500.0) {
                         mapgl::set_bearing(*hdg);
                         *last_sent_bearing = *hdg;
                     }
