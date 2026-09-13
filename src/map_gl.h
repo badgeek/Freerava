@@ -67,6 +67,9 @@ void zoom_step(int delta);
 // Heading-up mode: rotate the camera so `deg` points up (0 = north-up).
 void set_bearing(double deg);
 
+// 2.5D chase tilt: pitch the camera toward the horizon (0 = top-down flat).
+void set_pitch(double deg);
+
 // Re-render with the current camera (used when a frame had to be dropped
 // because the UI textures weren't imported yet).
 void poke();

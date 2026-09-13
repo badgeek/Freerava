@@ -24,9 +24,11 @@
 #include <GLES2/gl2ext.h>
 
 #include <atomic>
+#include <cmath>
 #include <condition_variable>
 #include <exception>
 #include <mutex>
+#include <chrono>
 #include <thread>
 
 #define MAPGL_LOG(...) __android_log_print(ANDROID_LOG_INFO, "cyclomp-mapgl", __VA_ARGS__)
@@ -75,6 +77,8 @@ struct Service {
     double scale = 1.0;            // accumulated pinch factor
     double bearing = 0;            // heading-up camera rotation
     bool bearingDirty = false;
+    double pitch = 0;              // 2.5D chase tilt (degrees; 0 = top-down)
+    bool pitchDirty = false;
     double ax = 0, ay = 0;         // pinch anchor (logical px)
 
     // Live ride track (lat/lon pairs, UI thread writes, map thread applies).
@@ -224,18 +228,32 @@ void threadMain() {
         }
     };
 
+    // Camera tween state (map-thread only). The public set_bearing/set_pitch
+    // push a TARGET; the loop eases these CURRENT values toward it each frame
+    // so rotation and tilt glide instead of snapping. While a tween is in
+    // flight the loop stops blocking and paces itself at ~60fps.
+    double bearingCur = 0.0, pitchCur = 0.0;
+    bool animating = false;
+    constexpr double kTweenEase = 0.30; // per-frame approach fraction
+
     for (;;) {
-        bool ctr, mset, trk, brgDirty;
-        double la, lo, zm, dx, dy, sc, ax, ay, mlat, mlon, brg;
+        bool ctr, mset, trk, brgDirty, pchDirty;
+        double la, lo, zm, dx, dy, sc, ax, ay, mlat, mlon, brg, pch;
         std::vector<std::pair<double, double>> trackPts;
         uint64_t gen;
         {
             std::unique_lock<std::mutex> lk(s.m);
-            s.cv.wait(lk, [&] {
+            auto ready = [&] {
                 return s.centerDirty || s.renderDirty || s.dx != 0 ||
                        s.dy != 0 || s.scale != 1.0 || s.trackDirty ||
-                       s.bearingDirty;
-            });
+                       s.bearingDirty || s.pitchDirty;
+            };
+            // Mid-tween: wake on the frame clock (or sooner on a command);
+            // otherwise sleep until the next command.
+            if (animating)
+                s.cv.wait_for(lk, std::chrono::milliseconds(16), ready);
+            else
+                s.cv.wait(lk, ready);
             gen = s.cmdGen;
             trk = s.trackDirty;
             s.trackDirty = false;
@@ -243,6 +261,9 @@ void threadMain() {
             brgDirty = s.bearingDirty;
             s.bearingDirty = false;
             brg = s.bearing;
+            pchDirty = s.pitchDirty;
+            s.pitchDirty = false;
+            pch = s.pitch;
             ctr = s.centerDirty;
             s.centerDirty = false;
             s.renderDirty = false;
@@ -261,13 +282,26 @@ void threadMain() {
             mlon = s.markerLon;
         }
         brighten_roads();
-        if (ctr || brgDirty) {
+        // Ease bearing (shortest angular path) and pitch toward their targets.
+        double bd = brg - bearingCur;
+        while (bd > 180.0) bd -= 360.0;
+        while (bd < -180.0) bd += 360.0;
+        double pd = pch - pitchCur;
+        bool brgAnim = std::fabs(bd) > 0.05;
+        bool pchAnim = std::fabs(pd) > 0.05;
+        bearingCur = brgAnim ? bearingCur + bd * kTweenEase : brg;
+        pitchCur = pchAnim ? pitchCur + pd * kTweenEase : pch;
+        if (bearingCur < 0.0) bearingCur += 360.0;
+        else if (bearingCur >= 360.0) bearingCur -= 360.0;
+        animating = brgAnim || pchAnim;
+        if (ctr || brgDirty || pchDirty || animating) {
             mln::CameraOptions cam;
             if (ctr) {
                 cam.withCenter(mln::LatLng{la, lo});
                 if (zm > 0) cam.withZoom(zm);
             }
-            if (brgDirty) cam.withBearing(brg);
+            cam.withBearing(bearingCur);
+            cam.withPitch(pitchCur);
             map.jumpTo(cam);
         }
         if (sc != 1.0)
@@ -509,6 +543,18 @@ void set_bearing(double deg) {
         std::lock_guard<std::mutex> lk(s.m);
         s.bearing = deg;
         s.bearingDirty = true;
+        ++s.cmdGen;
+    }
+    s.cv.notify_one();
+}
+
+void set_pitch(double deg) {
+    MAPGL_LOG("pitch -> %.0f", deg);
+    auto &s = svc();
+    {
+        std::lock_guard<std::mutex> lk(s.m);
+        s.pitch = deg;
+        s.pitchDirty = true;
         ++s.cmdGen;
     }
     s.cv.notify_one();

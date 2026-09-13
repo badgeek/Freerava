@@ -387,10 +387,12 @@ export component AppWindow inherits Window {
     in-out property <bool> replay-playing: false; // driven by C++
     in property <float> replay-progress: 0.0;     // 0..1
     in property <string> replay-speed-label: "30×";
+    in property <bool> detail-chase: false;       // 2.5D chase cam (driven by C++)
     callback detail-back();
     callback detail-map-shown();  // MAP tab opened: fit camera to the track
     callback replay-toggle();
     callback replay-speed-cycle();
+    callback detail-chase-toggle();
 
     // ---- Map (rendered off-screen by MapLibre; C++ pushes RGBA frames) ----
     in property <image> map-frame;
@@ -408,6 +410,9 @@ export component AppWindow inherits Window {
     // Heading-up mode: the map rotates so the bike's course points up.
     in property <bool> map-heading-up: false;
     callback map-heading-toggle();
+    // 2.5D perspective on the LIVE map (independent of the detail-map chase).
+    in property <bool> map-3d: false;
+    callback map-3d-toggle();
 
     // ---- Settings (screen 4, opened by the sticky gear button) ----
     // Value strings are owned by C++ (clamp + persist happen there).
@@ -791,13 +796,14 @@ export component AppWindow inherits Window {
             // Map controls: compass, locate, then zoom.
             if root.map-available : VerticalLayout {
                 x: parent.width - 56px;
-                y: parent.height - 224px;
+                y: parent.height - 276px;
                 width: 48px;
-                height: 208px;
+                height: 256px; // 5 × 48px square buttons + 4 × 4px spacing
                 spacing: 4px;
                 // COMPASS: toggle north-up ("N") vs heading-up (SVG course
                 // arrow, amber). No unicode arrows — tofu in bundled font.
                 Rectangle {
+                    height: 48px;
                     background: Palette.ink;
                     border-width: 1px;
                     border-color: root.map-heading-up ? Palette.amber : Palette.line;
@@ -821,9 +827,26 @@ export component AppWindow inherits Window {
                         commands: "M12 2 4.5 20.29l.71.71L12 18l6.79 3 .71-.71z";
                     }
                 }
+                // 2.5D: tilt the live map into a perspective (chase) view.
+                Rectangle {
+                    height: 48px;
+                    background: Palette.ink;
+                    border-width: 1px;
+                    border-color: root.map-3d ? Palette.cyan : Palette.line;
+                    TouchArea { clicked => { root.map-3d-toggle(); } }
+                    Text {
+                        text: "3D";
+                        color: root.map-3d ? Palette.cyan : Palette.phos;
+                        font-size: 15px;
+                        font-weight: 900;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
                 // LOCATE: recentre on the rider and relock the camera. Turns
                 // amber while the camera is following.
                 Rectangle {
+                    height: 48px;
                     background: Palette.ink;
                     border-width: 1px;
                     border-color: root.map-following ? Palette.amber : Palette.line;
@@ -874,6 +897,7 @@ export component AppWindow inherits Window {
                     }
                 }
                 Rectangle {
+                    height: 48px;
                     background: Palette.ink;
                     border-width: 1px;
                     border-color: Palette.line;
@@ -888,6 +912,7 @@ export component AppWindow inherits Window {
                     }
                 }
                 Rectangle {
+                    height: 48px;
                     background: Palette.ink;
                     border-width: 1px;
                     border-color: Palette.line;
@@ -1311,6 +1336,14 @@ export component AppWindow inherits Window {
                             label-size: 13px;
                             tint: Palette.amber;
                             pressed => { root.replay-speed-cycle(); }
+                        }
+                        TermButton {
+                            width: 64px;
+                            label: "2.5D";
+                            label-size: 13px;
+                            tint: Palette.cyan;
+                            filled: root.detail-chase;
+                            pressed => { root.detail-chase-toggle(); }
                         }
                         Rectangle {
                             horizontal-stretch: 1;

@@ -356,20 +356,35 @@ int main(int, char **)
     // Seconds since the last rotation sent to the map (compass rate limit).
     auto compass_elapsed = std::make_shared<double>(0.0);
 
+    // Detail-map 2.5D "chase camera": tilt + rotate to the biker's replayed
+    // course. Deliberately SEPARATE from `heading_up` (the main MAP compass)
+    // so toggling one never touches the other.
+    auto detail_chase = std::make_shared<bool>(false);
+    static constexpr double kChasePitch = 55.0; // degrees toward the horizon
+
+    // 2.5D on the LIVE MAP screen — a SEPARATE flag from `detail_chase` so the
+    // two map views stay independent (they share one physical camera, but only
+    // one map screen is visible at a time and each re-applies its own pitch).
+    // `map_pitch_applied` tracks what we last pushed so the tick only re-sends
+    // on change (and forces a re-apply when the MAP screen is re-entered).
+    auto map_3d = std::make_shared<bool>(false);
+    auto map_pitch_applied = std::make_shared<double>(-1.0);
+
     // ---- Ride replay (detail page, MAP tab) ----
     struct Replay {
         std::vector<core::TrackPoint> trk;
         double t = 0, total = 0;
         int speedIdx = 1; // 10x / 30x / 60x
         double lastLat = 0, lastLon = 0, lastBearing = 0;
-        bool haveLast = false;
+        bool haveLast = false;    // have a previous position (for the course)
+        bool haveBearing = false; // have sent a chase bearing at least once
     };
     static constexpr int kReplaySpeeds[3] = {10, 30, 60};
     auto rp = std::make_shared<Replay>();
     static slint::Timer replay_timer;
 
     auto replay_tick = [ui = slint::ComponentWeakHandle(ui), rp,
-                        replay_active, heading_up] {
+                        replay_active, detail_chase] {
         auto u = ui.lock();
         if (!u) return;
         auto &w = **u;
@@ -393,8 +408,9 @@ int main(int, char **)
         }
 #if defined(CYCLOMP_MAP_GL)
         mapgl::set_marker(lat, lon);
-        // Flyover: with heading-up on, rotate along the replayed course.
-        if (*heading_up && rp->haveLast) {
+        // Chase camera: rotate the (already tilted) map along the replayed
+        // course. Gated on the detail-only flag, never the main-map compass.
+        if (*detail_chase && rp->haveLast) {
             double la1 = rp->lastLat * M_PI / 180.0;
             double la2 = lat * M_PI / 180.0;
             double dlo = (lon - rp->lastLon) * M_PI / 180.0;
@@ -404,11 +420,14 @@ int main(int, char **)
             if (yb != 0.0 || xb != 0.0) {
                 double c = std::atan2(yb, xb) * 180.0 / M_PI;
                 if (c < 0) c += 360.0;
-                double d = std::fabs(c - rp->lastBearing);
+                // Normalise the delta with fmod BEFORE the >180 wrap so it
+                // survives any lastBearing value (the -999 sentinel trap).
+                double d = std::fmod(std::fabs(c - rp->lastBearing), 360.0);
                 if (d > 180.0) d = 360.0 - d;
-                if (d > 5.0) { // throttle small wiggles
+                if (!rp->haveBearing || d > 5.0) { // throttle small wiggles
                     mapgl::set_bearing(c);
                     rp->lastBearing = c;
+                    rp->haveBearing = true;
                 }
             }
         }
@@ -437,7 +456,7 @@ int main(int, char **)
     // MAP tab opened: show this ride's line, fit the camera, park the
     // marker at the start.
     ui->on_detail_map_shown([ui = slint::ComponentWeakHandle(ui), log, rp,
-                             replay_active] {
+                             replay_active, detail_chase] {
         auto u = ui.lock();
         if (!u) return;
         auto &w = **u;
@@ -445,6 +464,14 @@ int main(int, char **)
         replay_active->store(false);
         w.set_replay_playing(false);
         w.set_replay_progress(0.f);
+        // Enter the detail map flat and top-down, regardless of what the main
+        // MAP compass left the shared camera at. Chase defaults off.
+        *detail_chase = false;
+        w.set_detail_chase(false);
+#if defined(CYCLOMP_MAP_GL)
+        mapgl::set_bearing(0);
+        mapgl::set_pitch(0);
+#endif
         int i = w.get_selected_session();
         const auto &rows = log->newest_first();
         if (i < 0 || (size_t)i >= rows.size()) return;
@@ -452,6 +479,7 @@ int main(int, char **)
         rp->total = rp->trk.empty() ? 0.0 : (double)rp->trk.back().t_s;
         rp->t = 0;
         rp->haveLast = false;
+        rp->haveBearing = false;
         rp->lastBearing = 0;
 #if defined(CYCLOMP_MAP_GL)
         if (rp->trk.size() >= 2) {
@@ -510,18 +538,41 @@ int main(int, char **)
                 std::to_string(kReplaySpeeds[rp->speedIdx]) + "×"));
     });
 
+    // 2.5D chase-camera toggle (detail map only). ON = tilt the camera and
+    // let the replay flyover rotate to the biker's course; OFF = flat top-down
+    // north-up. Never touches the main-map compass (`heading_up`).
+    ui->on_detail_chase_toggle([ui = slint::ComponentWeakHandle(ui), rp,
+                                detail_chase] {
+        auto u = ui.lock();
+        if (!u) return;
+        *detail_chase = !*detail_chase;
+        (*u)->set_detail_chase(*detail_chase);
+#if defined(CYCLOMP_MAP_GL)
+        if (*detail_chase) {
+            mapgl::set_pitch(kChasePitch);
+            rp->haveBearing = false; // force the next flyover tick to rotate
+        } else {
+            mapgl::set_pitch(0);
+            mapgl::set_bearing(0); // back to flat north-up
+        }
+#endif
+    });
+
     // Leave the detail page: stop the replay, hand the marker back to the
     // live rider.
     ui->on_detail_back([ui = slint::ComponentWeakHandle(ui), replay_active,
-                        current_position] {
+                        current_position, detail_chase] {
         auto u = ui.lock();
         if (!u) return;
         replay_timer.stop();
         replay_active->store(false);
         (*u)->set_replay_playing(false);
+        *detail_chase = false;
+        (*u)->set_detail_chase(false);
         (*u)->set_screen(2);
 #if defined(CYCLOMP_MAP_GL)
-        mapgl::set_bearing(0); // leave the detail page north-up
+        mapgl::set_bearing(0); // leave the detail page flat north-up
+        mapgl::set_pitch(0);
         double la, lo;
         if (current_position(la, lo)) mapgl::set_marker(la, lo);
 #else
@@ -752,6 +803,22 @@ int main(int, char **)
 #endif
     });
 
+    // 2.5D toggle on the LIVE MAP screen. Independent of the detail-map chase.
+    ui->on_map_3d_toggle([ui = slint::ComponentWeakHandle(ui), map_3d,
+                          map_pitch_applied] {
+        auto u = ui.lock();
+        if (!u) return;
+        *map_3d = !*map_3d;
+        (*u)->set_map_3d(*map_3d);
+#if defined(CYCLOMP_MAP_GL)
+        double want = *map_3d ? kChasePitch : 0.0;
+        mapgl::set_pitch(want);
+        *map_pitch_applied = want;
+#else
+        (void)map_pitch_applied;
+#endif
+    });
+
     ui->on_map_pinch_begin([ui = slint::ComponentWeakHandle(ui), camera] {
         camera->release();
         if (auto u = ui.lock()) (*u)->set_map_following(false);
@@ -822,9 +889,11 @@ int main(int, char **)
         [ui = slint::ComponentWeakHandle(ui), source, engine, camera, cam_sink,
          sensors, publish_nav, publish_marker, recorder, heading_up,
          last_course, last_sent_bearing, replay_active, current_position,
-         settings, compass_elapsed] {
+         settings, compass_elapsed, map_3d, map_pitch_applied] {
             (void)compass_elapsed;
             (void)settings; // consumed only in the Android heading-up block
+            (void)map_3d;
+            (void)map_pitch_applied;
             auto u = ui.lock();
             if (!u) return;
             auto &w = **u;
@@ -841,10 +910,26 @@ int main(int, char **)
                     if (auto up = camera->on_position(la, lo)) cam_sink(*up);
             }
 #if defined(CYCLOMP_MAP_GL) && defined(__ANDROID__)
+            // Keep the live map's 2.5D pitch in sync with the MAP-screen
+            // toggle. Only touches the camera on the MAP screen and only when
+            // the value actually changed; leaving the screen arms a re-apply
+            // (the detail map resets pitch to 0 behind our back).
+            if (w.get_screen() == 1) {
+                double want = *map_3d ? kChasePitch : 0.0;
+                if (want != *map_pitch_applied) {
+                    mapgl::set_pitch(want);
+                    *map_pitch_applied = want;
+                }
+            } else {
+                *map_pitch_applied = -1.0;
+            }
             // Heading-up: compass while slow or stopped, GPS course once
             // moving briskly. Runs even outside a ride; paused during
-            // replays (the flyover owns the bearing there).
-            if (*heading_up && !replay_active->load()) {
+            // replays (the flyover owns the bearing there). Confined to the
+            // MAP screen: the map camera is a single shared mbgl instance, so
+            // without this gate the main-map compass would keep rotating the
+            // log-detail map too (they must stay independent).
+            if (*heading_up && !replay_active->load() && w.get_screen() == 1) {
                 *compass_elapsed += 0.5; // one tick
                 std::optional<double> hdg;
                 if (engine->state() == core::RideState::Running &&
