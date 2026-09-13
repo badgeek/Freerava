@@ -150,6 +150,7 @@ void publish_settings(AppWindow &w, const core::Settings &s) {
     w.set_set_tunnel_cap_value(fmt1((float)s.tunnel_cap));
     w.set_set_tunnel_fps_value(fmt0((float)s.tunnel_fps));
     w.set_set_compass_rate_value(fmt1((float)s.compass_interval_s));
+    w.set_set_road_bright_value(fmt0((float)s.road_brightness));
     w.set_set_tunnel_on_value(slint::SharedString(s.tunnel_enabled ? "ON" : "OFF"));
     w.set_set_mock_value(slint::SharedString(s.mock_ride ? "ON" : "OFF"));
     // The tunnel animation consumes the numeric values directly.
@@ -225,6 +226,9 @@ int main(int, char **)
     auto settings = std::make_shared<core::Settings>();
     core::load_settings(settings_path(), *settings);
     publish_settings(*ui, *settings);
+#if defined(CYCLOMP_MAP_GL)
+    mapgl::set_road_brightness((int)std::lround(settings->road_brightness));
+#endif
 
     // Telemetry: real GPS on Android, the RNG mock everywhere else.
     // CYCLOMP_MOCK_RIDE=1 or the settings toggle forces the mock on Android
@@ -508,7 +512,12 @@ int main(int, char **)
             double z = std::clamp(std::min(zx, zy) - 0.9, 3.0, 19.0);
             mapgl::set_camera((lat0 + lat1) / 2.0, (lon0 + lon1) / 2.0, z);
             mapgl::set_marker(rp->trk.front().lat, rp->trk.front().lon);
+            // Static start/stop bullets for the idle (non-replay) view.
+            mapgl::set_endpoints(rp->trk.front().lat, rp->trk.front().lon,
+                                 rp->trk.back().lat, rp->trk.back().lon);
         }
+        w.set_track_endpoints(false); // shown once the map thread projects them
+        w.set_marker_valid(false);    // the moving dot only appears in replay
 #endif
     });
 
@@ -569,8 +578,10 @@ int main(int, char **)
         (*u)->set_replay_playing(false);
         *detail_chase = false;
         (*u)->set_detail_chase(false);
+        (*u)->set_track_endpoints(false);
         (*u)->set_screen(2);
 #if defined(CYCLOMP_MAP_GL)
+        mapgl::clear_endpoints();
         mapgl::set_bearing(0); // leave the detail page flat north-up
         mapgl::set_pitch(0);
         double la, lo;
@@ -710,6 +721,9 @@ int main(int, char **)
         auto u = ui.lock();
         if (!u) return;
         publish_settings(**u, *settings);
+#if defined(CYCLOMP_MAP_GL)
+        mapgl::set_road_brightness((int)std::lround(settings->road_brightness));
+#endif
         double la, lo;
         if (zoom_changed && camera->following() && current_position(la, lo))
             cam_sink({la, lo, settings->follow_zoom});
@@ -754,6 +768,11 @@ int main(int, char **)
             settings->compass_interval_s =
                 dir == 0 ? def.compass_interval_s
                          : settings->compass_interval_s + dir * 0.5;
+            break;
+        case 9:
+            settings->road_brightness =
+                dir == 0 ? def.road_brightness
+                         : settings->road_brightness + dir * 5.0;
             break;
         }
         apply_settings(id == 0);
@@ -898,9 +917,26 @@ int main(int, char **)
             if (!u) return;
             auto &w = **u;
             // Keeps the GPS status strip and the map marker live even before
-            // the ride starts.
+            // the ride starts. On the detail page (screen 3) the map belongs
+            // to the replay/endpoints, not the live rider.
             publish_nav(w);
-            publish_marker(w);
+            if (w.get_screen() != 3) publish_marker(w);
+#if defined(CYCLOMP_MAP_GL)
+            // Detail map, idle: show the projected start/stop bullets and hide
+            // the moving replay dot. (During replay, replay_tick owns the dot.)
+            if (w.get_screen() == 3) {
+                double snx, sny, enx, eny, asp;
+                if (mapgl::endpoints_offset(snx, sny, enx, eny, asp)) {
+                    w.set_ep_start_nx((float)snx);
+                    w.set_ep_start_ny((float)sny);
+                    w.set_ep_end_nx((float)enx);
+                    w.set_ep_end_ny((float)eny);
+                    w.set_frame_aspect((float)asp);
+                    w.set_track_endpoints(true);
+                }
+                if (!replay_active->load()) w.set_marker_valid(false);
+            }
+#endif
             // With real GPS the startup camera push is skipped (nowhere to
             // point yet): place the camera on the very first fix, even while
             // idle — no LOCATE press needed after launch.

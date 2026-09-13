@@ -26,6 +26,9 @@ struct Settings {
     double compass_interval_s = 0.5;
     // Use the fake ride on Android too (applied at next launch).
     bool mock_ride = false;
+    // Road line brightness on the dark map, 0 (off) .. 100 (2x the tuned
+    // reference). 50 = the tuned reference look (default).
+    double road_brightness = 50.0;
 };
 
 // Bring every field back into its legal range.

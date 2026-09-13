@@ -15,6 +15,7 @@ Settings clamp_settings(Settings s) {
     s.tunnel_cap = std::clamp(s.tunnel_cap, s.tunnel_base, 3.0);
     s.tunnel_fps = std::clamp(s.tunnel_fps, 5.0, 60.0);
     s.compass_interval_s = std::clamp(s.compass_interval_s, 0.5, 5.0);
+    s.road_brightness = std::clamp(s.road_brightness, 0.0, 100.0);
     return s;
 }
 
@@ -30,6 +31,7 @@ bool save_settings(const std::string &path, const Settings &s) {
     std::fprintf(f, "tunnel_enabled=%d\n", s.tunnel_enabled ? 1 : 0);
     std::fprintf(f, "compass_interval_s=%.1f\n", s.compass_interval_s);
     std::fprintf(f, "mock_ride=%d\n", s.mock_ride ? 1 : 0);
+    std::fprintf(f, "road_brightness=%.0f\n", s.road_brightness);
     std::fclose(f);
     return true;
 }
@@ -52,6 +54,7 @@ bool load_settings(const std::string &path, Settings &out) {
         else if (!std::strcmp(line, "tunnel_enabled")) out.tunnel_enabled = v != 0;
         else if (!std::strcmp(line, "compass_interval_s")) out.compass_interval_s = v;
         else if (!std::strcmp(line, "mock_ride")) out.mock_ride = v != 0;
+        else if (!std::strcmp(line, "road_brightness")) out.road_brightness = v;
         // unknown keys: ignored
     }
     std::fclose(f);

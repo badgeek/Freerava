@@ -388,6 +388,12 @@ export component AppWindow inherits Window {
     in property <float> replay-progress: 0.0;     // 0..1
     in property <string> replay-speed-label: "30×";
     in property <bool> detail-chase: false;       // 2.5D chase cam (driven by C++)
+    // Static start/stop bullets on the detail map (shown when not replaying).
+    in property <bool> track-endpoints: false;
+    in property <float> ep-start-nx;
+    in property <float> ep-start-ny;
+    in property <float> ep-end-nx;
+    in property <float> ep-end-ny;
     callback detail-back();
     callback detail-map-shown();  // MAP tab opened: fit camera to the track
     callback replay-toggle();
@@ -424,6 +430,7 @@ export component AppWindow inherits Window {
     in property <string> set-tunnel-fps-value: "30";
     in property <string> set-tunnel-on-value: "ON";
     in property <string> set-compass-rate-value: "0.5";
+    in property <string> set-road-bright-value: "50";
     in property <string> set-mock-value: "OFF";
     // Numeric tunnel parameters for the dashboard animation.
     in property <float> tunnel-base: 0.3;   // cycles/s at rest
@@ -1282,7 +1289,8 @@ export component AppWindow inherits Window {
                         image-fit: cover;
                     }
                     // replay marker (same cover-projection as the MAP screen)
-                    if root.map-available && root.marker-valid : Rectangle {
+                    if root.map-available && root.marker-valid
+                       && root.replay-playing : Rectangle {
                         width: 26px;
                         height: 26px;
                         x: (parent.width - self.width) / 2 + root.marker-nx *
@@ -1299,6 +1307,50 @@ export component AppWindow inherits Window {
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
                             border-radius: 5px;
+                            background: Palette.red;
+                        }
+                    }
+                    // Idle view: start (green) and stop (red) bullets. Hidden
+                    // during replay, where the single moving dot takes over.
+                    if root.map-available && root.track-endpoints
+                       && !root.replay-playing : Rectangle {
+                        width: 22px;
+                        height: 22px;
+                        x: (parent.width - self.width) / 2 + root.ep-start-nx *
+                           max(parent.width, parent.height * root.frame-aspect);
+                        y: (parent.height - self.height) / 2 + root.ep-start-ny *
+                           max(parent.width / root.frame-aspect, parent.height);
+                        border-radius: self.width / 2;
+                        border-width: 2px;
+                        border-color: Palette.phos;
+                        background: #03050366;
+                        Rectangle {
+                            width: 8px;
+                            height: 8px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            border-radius: 4px;
+                            background: Palette.phos;
+                        }
+                    }
+                    if root.map-available && root.track-endpoints
+                       && !root.replay-playing : Rectangle {
+                        width: 22px;
+                        height: 22px;
+                        x: (parent.width - self.width) / 2 + root.ep-end-nx *
+                           max(parent.width, parent.height * root.frame-aspect);
+                        y: (parent.height - self.height) / 2 + root.ep-end-ny *
+                           max(parent.width / root.frame-aspect, parent.height);
+                        border-radius: self.width / 2;
+                        border-width: 2px;
+                        border-color: Palette.red;
+                        background: #03050366;
+                        Rectangle {
+                            width: 8px;
+                            height: 8px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            border-radius: 4px;
                             background: Palette.red;
                         }
                     }
@@ -1445,6 +1497,14 @@ export component AppWindow inherits Window {
                     minus => { root.setting-adjust(8, -1); }
                     plus => { root.setting-adjust(8, 1); }
                     reset => { root.setting-adjust(8, 0); }
+                }
+                SettingRow {
+                    label: "ROAD BRIGHTNESS  %";
+                    value: root.set-road-bright-value;
+                    default-value: "50";
+                    minus => { root.setting-adjust(9, -1); }
+                    plus => { root.setting-adjust(9, 1); }
+                    reset => { root.setting-adjust(9, 0); }
                 }
                 SettingRow {
                     label: "TUNNEL FPS";

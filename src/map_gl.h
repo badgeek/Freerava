@@ -70,6 +70,16 @@ void set_bearing(double deg);
 // 2.5D chase tilt: pitch the camera toward the horizon (0 = top-down flat).
 void set_pitch(double deg);
 
+// Road line brightness on the dark style, 0 (darkest) .. 100 (full).
+void set_road_brightness(int pct);
+
+// Static start/end bullets for the detail map (lat/lon). Projected every
+// render; read back via endpoints_offset. clear_endpoints() hides them.
+void set_endpoints(double slat, double slon, double elat, double elon);
+void clear_endpoints();
+bool endpoints_offset(double &snx, double &sny, double &enx, double &eny,
+                      double &aspect);
+
 // Re-render with the current camera (used when a frame had to be dropped
 // because the UI textures weren't imported yet).
 void poke();

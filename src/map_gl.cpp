@@ -23,6 +23,7 @@
 #include <GLES3/gl3.h>
 #include <GLES2/gl2ext.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <condition_variable>
@@ -91,6 +92,13 @@ struct Service {
     std::atomic<bool> markerProjected{false};
     std::atomic<double> markerNx{0}, markerNy{0}, markerAspect{1};
 
+    // Static start/end bullets on the detail map (projected each render so
+    // they track pan/zoom; shown when a ride replay is NOT running).
+    double epSLat = 0, epSLon = 0, epELat = 0, epELon = 0;
+    bool epSet = false;
+    std::atomic<bool> epProjected{false};
+    std::atomic<double> epSNx{0}, epSNy{0}, epENx{0}, epENy{0};
+
     AHardwareBuffer *ahb[kBufs] = {nullptr, nullptr, nullptr};
     EGLImageKHR image[kBufs] = {EGL_NO_IMAGE_KHR, EGL_NO_IMAGE_KHR,
                                 EGL_NO_IMAGE_KHR};
@@ -101,6 +109,10 @@ struct Service {
     std::atomic<bool> uiImported{false};
 
     std::atomic<bool> started{false};
+
+    // Road line brightness, 0..100 (100 = the tuned reference colours below).
+    std::atomic<int> roadBrightness{100};
+    std::atomic<bool> roadDirty{true};
 };
 
 Service &svc() {
@@ -202,8 +214,15 @@ void threadMain() {
     // tint) once the style has loaded; getLayer returns null until then,
     // so this retries each loop pass until it lands.
     bool roadsBrightened = false;
-    auto brighten_roads = [&map, &roadsBrightened] {
-        if (roadsBrightened) return;
+    auto brighten_roads = [&map, &roadsBrightened, &s] {
+        // Re-apply when the brightness changed, or keep retrying until the
+        // style has loaded (getLayer returns null before then).
+        bool dirty = s.roadDirty.exchange(false);
+        if (roadsBrightened && !dirty) return;
+        // The tuned reference colours sit at 50; the slider scales RGB from 0
+        // (roads off) through 1x (=50) up to 2x at 100 (clamped to white),
+        // alpha untouched.
+        double k = std::clamp(s.roadBrightness.load(), 0, 100) / 50.0;
         const std::pair<const char *, mln::Color> recolor[] = {
             {"highway_minor", {0.20f, 0.22f, 0.20f, 1.f}},
             {"highway_path", {0.16f, 0.18f, 0.16f, 1.f}},
@@ -218,13 +237,16 @@ void threadMain() {
         for (const auto &r : recolor) {
             if (auto *l = static_cast<mln::style::LineLayer *>(
                     map.getStyle().getLayer(r.first))) {
-                l->setLineColor(r.second);
+                const mln::Color &c = r.second;
+                l->setLineColor(mln::Color{(float)std::min(c.r * k, 1.0),
+                                           (float)std::min(c.g * k, 1.0),
+                                           (float)std::min(c.b * k, 1.0), c.a});
                 any = true;
             }
         }
         if (any) {
             roadsBrightened = true;
-            MAPGL_LOG("dark style roads brightened");
+            MAPGL_LOG("roads recoloured (brightness %d)", s.roadBrightness.load());
         }
     };
 
@@ -237,8 +259,9 @@ void threadMain() {
     constexpr double kTweenEase = 0.30; // per-frame approach fraction
 
     for (;;) {
-        bool ctr, mset, trk, brgDirty, pchDirty;
+        bool ctr, mset, trk, brgDirty, pchDirty, epSet;
         double la, lo, zm, dx, dy, sc, ax, ay, mlat, mlon, brg, pch;
+        double epSLat, epSLon, epELat, epELon;
         std::vector<std::pair<double, double>> trackPts;
         uint64_t gen;
         {
@@ -280,6 +303,11 @@ void threadMain() {
             mset = s.markerSet;
             mlat = s.markerLat;
             mlon = s.markerLon;
+            epSet = s.epSet;
+            epSLat = s.epSLat;
+            epSLon = s.epSLon;
+            epELat = s.epELat;
+            epELon = s.epELon;
         }
         brighten_roads();
         // Ease bearing (shortest angular path) and pitch toward their targets.
@@ -386,6 +414,16 @@ void threadMain() {
             s.markerNy.store((p.y - lh / 2.0) / lh);
             s.markerAspect.store((double)lw / (double)lh);
             s.markerProjected.store(true);
+        }
+        if (epSet) {
+            auto ps = map.pixelForLatLng(mln::LatLng{epSLat, epSLon});
+            auto pe = map.pixelForLatLng(mln::LatLng{epELat, epELon});
+            s.epSNx.store((ps.x - lw / 2.0) / lw);
+            s.epSNy.store((ps.y - lh / 2.0) / lh);
+            s.epENx.store((pe.x - lw / 2.0) / lw);
+            s.epENy.store((pe.y - lh / 2.0) / lh);
+            s.markerAspect.store((double)lw / (double)lh);
+            s.epProjected.store(true);
         }
 
         int idx = cur;
@@ -500,6 +538,39 @@ bool marker_offset(double &nx, double &ny, double &aspect) {
     return true;
 }
 
+void set_endpoints(double slat, double slon, double elat, double elon) {
+    auto &s = svc();
+    {
+        std::lock_guard<std::mutex> lk(s.m);
+        s.epSLat = slat;
+        s.epSLon = slon;
+        s.epELat = elat;
+        s.epELon = elon;
+        s.epSet = true;
+        s.renderDirty = true; // re-render so the projection follows
+    }
+    s.cv.notify_one();
+}
+
+void clear_endpoints() {
+    auto &s = svc();
+    std::lock_guard<std::mutex> lk(s.m);
+    s.epSet = false;
+    s.epProjected.store(false);
+}
+
+bool endpoints_offset(double &snx, double &sny, double &enx, double &eny,
+                      double &aspect) {
+    auto &s = svc();
+    if (!s.epProjected.load()) return false;
+    snx = s.epSNx.load();
+    sny = s.epSNy.load();
+    enx = s.epENx.load();
+    eny = s.epENy.load();
+    aspect = s.markerAspect.load();
+    return true;
+}
+
 void drag_by(double dx, double dy) {
     auto &s = svc();
     {
@@ -556,6 +627,19 @@ void set_pitch(double deg) {
         s.pitch = deg;
         s.pitchDirty = true;
         ++s.cmdGen;
+    }
+    s.cv.notify_one();
+}
+
+void set_road_brightness(int pct) {
+    auto &s = svc();
+    if (pct < 0) pct = 0;
+    else if (pct > 100) pct = 100;
+    s.roadBrightness.store(pct);
+    s.roadDirty.store(true);
+    {
+        std::lock_guard<std::mutex> lk(s.m);
+        s.renderDirty = true; // re-apply the recolour and repaint
     }
     s.cv.notify_one();
 }
