@@ -13,6 +13,7 @@ Settings clamp_settings(Settings s) {
     s.tunnel_base = std::clamp(s.tunnel_base, 0.1, 2.0);
     // The cap can never sit below the base rate.
     s.tunnel_cap = std::clamp(s.tunnel_cap, s.tunnel_base, 3.0);
+    s.tunnel_fps = std::clamp(s.tunnel_fps, 5.0, 60.0);
     return s;
 }
 
@@ -24,6 +25,8 @@ bool save_settings(const std::string &path, const Settings &s) {
     std::fprintf(f, "bearing_min_delta_deg=%.1f\n", s.bearing_min_delta_deg);
     std::fprintf(f, "tunnel_base=%.2f\n", s.tunnel_base);
     std::fprintf(f, "tunnel_cap=%.2f\n", s.tunnel_cap);
+    std::fprintf(f, "tunnel_fps=%.0f\n", s.tunnel_fps);
+    std::fprintf(f, "tunnel_enabled=%d\n", s.tunnel_enabled ? 1 : 0);
     std::fprintf(f, "mock_ride=%d\n", s.mock_ride ? 1 : 0);
     std::fclose(f);
     return true;
@@ -43,6 +46,8 @@ bool load_settings(const std::string &path, Settings &out) {
         else if (!std::strcmp(line, "bearing_min_delta_deg")) out.bearing_min_delta_deg = v;
         else if (!std::strcmp(line, "tunnel_base")) out.tunnel_base = v;
         else if (!std::strcmp(line, "tunnel_cap")) out.tunnel_cap = v;
+        else if (!std::strcmp(line, "tunnel_fps")) out.tunnel_fps = v;
+        else if (!std::strcmp(line, "tunnel_enabled")) out.tunnel_enabled = v != 0;
         else if (!std::strcmp(line, "mock_ride")) out.mock_ride = v != 0;
         // unknown keys: ignored
     }

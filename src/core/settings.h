@@ -17,6 +17,10 @@ struct Settings {
     // (cycles per second).
     double tunnel_base = 0.3;
     double tunnel_cap = 1.0;
+    // Animation tick rate (frames per second) — lower = less CPU/battery.
+    double tunnel_fps = 30.0;
+    // Master switch for the tunnel animation.
+    bool tunnel_enabled = true;
     // Use the fake ride on Android too (applied at next launch).
     bool mock_ride = false;
 };

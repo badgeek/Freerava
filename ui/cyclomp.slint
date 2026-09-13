@@ -361,10 +361,14 @@ export component AppWindow inherits Window {
     in property <string> set-bearing-delta-value: "3";
     in property <string> set-tunnel-base-value: "0.3";
     in property <string> set-tunnel-cap-value: "1.0";
+    in property <string> set-tunnel-fps-value: "30";
+    in property <string> set-tunnel-on-value: "ON";
     in property <string> set-mock-value: "OFF";
-    // Numeric tunnel rates for the dashboard animation (cycles/s).
-    in property <float> tunnel-base: 0.3;
-    in property <float> tunnel-cap: 1.0;
+    // Numeric tunnel parameters for the dashboard animation.
+    in property <float> tunnel-base: 0.3;   // cycles/s at rest
+    in property <float> tunnel-cap: 1.0;    // cycles/s ceiling
+    in property <float> tunnel-fps: 30;     // animation tick rate
+    in property <bool> tunnel-enabled: true;
     // id: 0 follow zoom, 1 heading speed, 2 bearing step, 3 mock ride.
     // dir: -1 / +1 (ignored for the mock toggle); 0 = reset to default.
     callback setting-adjust(int, int);
@@ -422,21 +426,21 @@ export component AppWindow inherits Window {
                 // Wireframe tunnel while the ride runs: concentric squares
                 // fly outward (quadratic growth = perspective), rate scales
                 // with speed. Drawn before the readout, so it sits behind.
-                if root.ride-state == 1 : tunnel := Rectangle {
+                if root.ride-state == 1 && root.tunnel-enabled : tunnel := Rectangle {
                     width: 100%;
                     height: 100%;
                     // Tunnel rate follows the rider, capped so the motion
-                    // stays calm at speed; base/cap are SYSTEM PARAMETERS.
-                    // The phase is integrated on a Timer — multiplying a
-                    // running clock by a changing rate would make it jump
-                    // at every speed update.
+                    // stays calm at speed; base/cap/fps and the on/off
+                    // switch are SYSTEM PARAMETERS. The phase is integrated
+                    // on a Timer — multiplying a running clock by a changing
+                    // rate would make it jump at every speed update.
                     property <float> phase: 0;
                     Timer {
-                        interval: 33ms;
+                        interval: (1000 / Math.max(root.tunnel-fps, 1)) * 1ms;
                         running: true;
                         triggered => {
                             tunnel.phase = Math.mod(
-                                tunnel.phase + 0.033 *
+                                tunnel.phase + (1.0 / Math.max(root.tunnel-fps, 1)) *
                                 Math.clamp(root.tunnel-base + root.speed / 50.0,
                                            root.tunnel-base, root.tunnel-cap),
                                 1.0);
@@ -1342,6 +1346,22 @@ export component AppWindow inherits Window {
                     minus => { root.setting-adjust(5, -1); }
                     plus => { root.setting-adjust(5, 1); }
                     reset => { root.setting-adjust(5, 0); }
+                }
+                SettingRow {
+                    label: "TUNNEL FPS";
+                    value: root.set-tunnel-fps-value;
+                    default-value: "30";
+                    minus => { root.setting-adjust(6, -1); }
+                    plus => { root.setting-adjust(6, 1); }
+                    reset => { root.setting-adjust(6, 0); }
+                }
+                SettingRow {
+                    label: "TUNNEL ANIMATION";
+                    value: root.set-tunnel-on-value;
+                    default-value: "ON";
+                    stepper: false;
+                    plus => { root.setting-adjust(7, 1); }
+                    reset => { root.setting-adjust(7, 0); }
                 }
                 SettingRow {
                     label: "MOCK RIDE  (RESTART)";
