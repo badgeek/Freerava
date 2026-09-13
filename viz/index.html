@@ -32,7 +32,7 @@
   canvas { display: block; }
   .hide { display: none !important; }
   #vignette { background: radial-gradient(ellipse 75% 65% at 50% 42%,
-    rgba(0,0,0,0) 55%, rgba(28,32,44,.055) 78%, rgba(28,32,44,.13) 100%); }
+    rgba(0,0,0,0) 52%, rgba(6,26,19,.10) 78%, rgba(6,26,19,.24) 100%); }
   #legendbar { background: linear-gradient(90deg, #fcd0ae, #fc5200, #8f2d00); }
   #scrub, #exag { accent-color: #fc5200; height: 4px; cursor: pointer; }
   #viewmodes button.on, .pill.on { background: #fc5200; border-color: #fc5200; color: #fff; }
@@ -154,7 +154,7 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 
 const COL = {
-  bg: 0xeef0f3, grid: 0xd7dce2, grid2: 0xe4e8ed,
+  bg: 0x1b4033, grid: 0x2f5c4a, grid2: 0x27503f,
   rampLo: 0xfcd0ae, accent: 0xfc5200, rampHi: 0x8f2d00,
   start: 0x16a34a, finish: 0xdc2626, white: 0xffffff,
 };
@@ -175,7 +175,7 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(COL.bg);
 // Range is set from the ride's own size in frameCamera() — fixed distances
 // fogged a multi-kilometre ride out completely.
-scene.fog = new THREE.Fog(0xf2f4f7, 1e6, 2e6); // matched to the horizon band
+scene.fog = new THREE.Fog(0x2b5a47, 1e6, 2e6); // matched to the horizon band
 
 const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 20000);
 camera.position.set(300, 320, 480);
@@ -206,11 +206,12 @@ function skyTexture() {
   c.width = 2; c.height = 256;
   const x = c.getContext('2d');
   const grad = x.createLinearGradient(0, 0, 0, 256);
-  grad.addColorStop(0.00, '#d3dcea'); // zenith, cool
-  grad.addColorStop(0.42, '#e7ecf3');
-  grad.addColorStop(0.60, '#f7f8fa'); // horizon glow
-  grad.addColorStop(0.78, '#e9ebef');
-  grad.addColorStop(1.00, '#dcdfe5'); // below the horizon
+  // Cutting-mat studio: deep green above, lighter toward the horizon.
+  grad.addColorStop(0.00, '#12352a'); // zenith, deep mat green
+  grad.addColorStop(0.42, '#1d4536');
+  grad.addColorStop(0.60, '#2b5a47'); // horizon glow
+  grad.addColorStop(0.78, '#22503f');
+  grad.addColorStop(1.00, '#173d30'); // below the horizon
   x.fillStyle = grad; x.fillRect(0, 0, 2, 256);
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
@@ -235,11 +236,11 @@ function shadowTexture() {
   // Tighter core than a plain radial falloff: mostly solid under the block,
   // then a quick soft edge, so it reads as contact rather than a grey haze.
   const grad = x.createRadialGradient(s / 2, s / 2, s * 0.05, s / 2, s / 2, s / 2);
-  grad.addColorStop(0.00, 'rgba(22,27,40,0.55)');
-  grad.addColorStop(0.38, 'rgba(22,27,40,0.40)');
-  grad.addColorStop(0.62, 'rgba(22,27,40,0.16)');
-  grad.addColorStop(0.82, 'rgba(22,27,40,0.04)');
-  grad.addColorStop(1.00, 'rgba(22,27,40,0)');
+  grad.addColorStop(0.00, 'rgba(5,22,15,0.58)');
+  grad.addColorStop(0.38, 'rgba(5,22,15,0.42)');
+  grad.addColorStop(0.62, 'rgba(5,22,15,0.17)');
+  grad.addColorStop(0.82, 'rgba(5,22,15,0.04)');
+  grad.addColorStop(1.00, 'rgba(5,22,15,0)');
   x.fillStyle = grad; x.fillRect(0, 0, s, s);
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
@@ -267,12 +268,14 @@ function gridTexture() {
     }
     x.stroke();
   };
-  line(1, 'rgba(120,134,158,0.18)', 1);  // minor
-  line(8, 'rgba(92,108,134,0.34)', 2);   // major
+  // Self-healing cutting-mat look: dark green field with pale mat lines.
+  x.fillStyle = '#1f4034'; x.fillRect(0, 0, s, s);
+  line(1, 'rgba(198,226,210,0.20)', 1);  // minor
+  line(8, 'rgba(214,238,224,0.42)', 2);  // major
   const fade = x.createRadialGradient(s / 2, s / 2, s * 0.08, s / 2, s / 2, s / 2);
-  fade.addColorStop(0.00, 'rgba(0,0,0,0.85)');
-  fade.addColorStop(0.50, 'rgba(0,0,0,0.55)');
-  fade.addColorStop(0.82, 'rgba(0,0,0,0.12)');
+  fade.addColorStop(0.00, 'rgba(0,0,0,1)');
+  fade.addColorStop(0.55, 'rgba(0,0,0,0.92)');
+  fade.addColorStop(0.86, 'rgba(0,0,0,0.30)');
   fade.addColorStop(1.00, 'rgba(0,0,0,0)');
   x.globalCompositeOperation = 'destination-in';
   x.fillStyle = fade; x.fillRect(0, 0, s, s);
