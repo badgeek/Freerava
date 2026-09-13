@@ -90,8 +90,10 @@ void publish_idle(AppWindow &w) {
 
 namespace {
 JavaVM *g_java_vm = nullptr;
+jobject g_activity = nullptr;
 }
 JavaVM *cyclomp_java_vm() { return g_java_vm; }
+jobject cyclomp_activity() { return g_activity; }
 
 #ifdef CYCLOMP_HAVE_MAPLIBRE
 // mbgl-core's android platform threads attach to the JVM through this global
@@ -102,6 +104,9 @@ namespace mln { namespace android { extern JavaVM *theJVM; } }
 extern "C" JNIEXPORT void ANativeActivity_onCreate(
     ANativeActivity *activity, void *savedState, size_t savedStateSize) {
     g_java_vm = activity->vm;
+    // activity->clazz is only valid for this frame — pin it for the GPS source.
+    if (activity->env && activity->clazz)
+        g_activity = activity->env->NewGlobalRef(activity->clazz);
 #ifdef CYCLOMP_HAVE_MAPLIBRE
     mln::android::theJVM = activity->vm;
 #endif

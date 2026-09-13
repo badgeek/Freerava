@@ -2,6 +2,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- Map tiles (MapLibre via JNI HttpURLConnection) -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Ride telemetry (LocationManager via JNI; requested at runtime) -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- The dashboard still runs without a GPS radio (mock/demo mode). -->
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
     <application
         android:label="cyclomp"
         android:hasCode="false">
