@@ -537,6 +537,15 @@ export component AppWindow inherits Window {
                 }
             }
 
+            // ---- Lower console: one uniform 12px side margin so the
+            // panels and controls line up with the header above (they used
+            // to sit full-bleed at 0px while the header was inset 12px). ----
+            Rectangle {
+              background: Palette.ink;
+              VerticalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+
             // ---- Telemetry panel ----
             TermPanel {
                 caption: "TELEMETRY";
@@ -597,8 +606,6 @@ export component AppWindow inherits Window {
             // ---- Ride controls: START / PAUSE+STOP / RESUME+STOP ----
             HorizontalLayout {
                 height: 58px;
-                padding-left: 10px;
-                padding-right: 10px;
                 spacing: 8px;
                 if root.ride-state == 0 : TermButton {
                     horizontal-stretch: 1;
@@ -619,6 +626,8 @@ export component AppWindow inherits Window {
                 }
             }
             Rectangle { height: 8px; background: Palette.ink; }
+              }
+            }
         }
 
         // ================= MAP =================
