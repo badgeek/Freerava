@@ -12,6 +12,7 @@ add_library(cyclomp_core STATIC
     src/core/format.cpp
     src/core/mock_telemetry.cpp
     src/core/ride_engine.cpp
+    src/core/session_db.cpp
     src/core/session_store.cpp
     src/core/settings.cpp
     src/core/track.cpp)
@@ -19,6 +20,16 @@ target_include_directories(cyclomp_core PUBLIC src)
 target_compile_features(cyclomp_core PUBLIC cxx_std_20)
 # Linked into the Android shared lib.
 set_target_properties(cyclomp_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# SQLite persistence (session_db.cpp). sqlite3 is already in the build:
+# Android links maplibre's vendored amalgamation (see below) and only needs
+# its header here; desktop + the test lane link the system libsqlite3.
+if(ANDROID)
+    target_include_directories(cyclomp_core SYSTEM PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/../deps/maplibre-native/vendor/sqlite/include)
+else()
+    target_link_libraries(cyclomp_core PUBLIC sqlite3)
+endif()
 
 if(CYCLOMP_BUILD_APP)
 
@@ -177,6 +188,7 @@ if(NOT ANDROID)
             tests/test_mock_telemetry.cpp
             tests/test_follow_camera.cpp
             tests/test_settings.cpp
+            tests/test_session_db.cpp
             tests/test_track.cpp)
         target_link_libraries(cyclomp_tests PRIVATE cyclomp_core doctest::doctest)
         add_test(NAME cyclomp_tests COMMAND cyclomp_tests)

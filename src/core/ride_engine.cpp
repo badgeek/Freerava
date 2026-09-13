@@ -68,6 +68,23 @@ void RideEngine::tick(double dt_s, const Sample &s) {
     }
 }
 
+RideEngine::Snapshot RideEngine::snapshot() const {
+    return {(int)state_,  live_,       sum_speed_,   max_kmh_,    sum_hr_,
+            sum_cad_,     samples_,    hr_samples_,  cad_samples_};
+}
+
+void RideEngine::restore(const Snapshot &s) {
+    state_ = (RideState)s.state;
+    live_ = s.live;
+    sum_speed_ = s.sum_speed;
+    max_kmh_ = s.max_kmh;
+    sum_hr_ = s.sum_hr;
+    sum_cad_ = s.sum_cad;
+    samples_ = s.samples;
+    hr_samples_ = s.hr_samples;
+    cad_samples_ = s.cad_samples;
+}
+
 void RideEngine::reset_stats() {
     live_ = LiveStats{};
     sum_speed_ = max_kmh_ = 0;

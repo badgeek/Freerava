@@ -8,6 +8,7 @@
 #include "core/format.h"
 #include "core/mock_telemetry.h"
 #include "core/ride_engine.h"
+#include "core/session_db.h"
 #include "core/session_store.h"
 #include "core/settings.h"
 #include "core/track.h"
@@ -119,7 +120,8 @@ SessionRow to_row(const core::SessionSummary &s) {
     };
 }
 
-// Where finished rides live between runs.
+// Where finished rides live between runs (legacy text log; still read once to
+// migrate old data into the SQLite DB below).
 std::string sessions_path() {
 #ifdef __ANDROID__
     ::mkdir("/data/data/dev.bauhouse.cyclomp/files", 0700); // EEXIST is fine
@@ -129,6 +131,22 @@ std::string sessions_path() {
     return std::string(h ? h : ".") + "/.cyclomp_sessions.txt";
 #endif
 }
+
+// SQLite store: finished rides + the single in-progress ride.
+std::string db_path() {
+#ifdef __ANDROID__
+    ::mkdir("/data/data/dev.bauhouse.cyclomp/files", 0700);
+    return "/data/data/dev.bauhouse.cyclomp/files/cyclomp.db";
+#else
+    const char *h = std::getenv("HOME");
+    return std::string(h ? h : ".") + "/.cyclomp.db";
+#endif
+}
+
+// Set from slint_main so the interposed onPause can flush the active ride
+// before Android suspends/kills us in the background. Runs on the main thread
+// (same as the telemetry timer), so it shares state without locking.
+std::function<void()> g_flush_active = [] {};
 
 // Where the tunable parameters live between runs.
 std::string settings_path() {
@@ -194,6 +212,17 @@ jobject cyclomp_activity() { return g_activity; }
 namespace mln { namespace android { extern JavaVM *theJVM; } }
 #endif
 
+namespace {
+// Chain onto Slint's own onPause so we flush the in-progress ride the instant
+// we lose the foreground (e.g. the user opens a QRIS/banking app) — before
+// Android may kill the backgrounded process. Slint's callback still runs.
+void (*g_prev_on_pause)(ANativeActivity *) = nullptr;
+void cyclomp_on_pause(ANativeActivity *a) {
+    g_flush_active();
+    if (g_prev_on_pause) g_prev_on_pause(a);
+}
+} // namespace
+
 extern "C" JNIEXPORT void ANativeActivity_onCreate(
     ANativeActivity *activity, void *savedState, size_t savedStateSize) {
     g_java_vm = activity->vm;
@@ -208,6 +237,11 @@ extern "C" JNIEXPORT void ANativeActivity_onCreate(
     Fn real = h ? (Fn)dlsym(h, "ANativeActivity_onCreate") : nullptr;
     if (real && real != &ANativeActivity_onCreate)
         real(activity, savedState, savedStateSize);
+    // Slint has now installed its lifecycle callbacks; wrap onPause.
+    if (activity->callbacks && activity->callbacks->onPause != &cyclomp_on_pause) {
+        g_prev_on_pause = activity->callbacks->onPause;
+        activity->callbacks->onPause = &cyclomp_on_pause;
+    }
 }
 #endif
 
@@ -313,11 +347,63 @@ int main(int, char **)
     auto log = std::make_shared<core::SessionLog>();
     auto recorder = std::make_shared<core::TrackRecorder>();
 
+    // SQLite persistence. First run after the text era: migrate the old
+    // sessions.txt in, then rename it aside so we don't import it twice.
+    auto store = std::make_shared<core::SessionStore>();
+    store->open(db_path());
+    if (store->ok() && store->session_count() == 0) {
+        if (store->import_text_log(sessions_path()) > 0)
+            std::rename(sessions_path().c_str(),
+                        (sessions_path() + ".imported").c_str());
+    }
+
     // History of finished rides, newest first; persisted across restarts.
     auto sessions = std::make_shared<slint::VectorModel<SessionRow>>();
-    core::load_sessions(sessions_path(), *log);
+    if (store->ok())
+        store->load_all(*log);
+    else
+        core::load_sessions(sessions_path(), *log); // DB unavailable: fall back
     for (const auto &s : log->newest_first()) sessions->push_back(to_row(s));
     ui->set_sessions(sessions);
+
+    // Persist the in-progress ride so a HOLD that gets backgrounded (paying
+    // QRIS, a call) survives the process being killed. Snapshot = engine state
+    // + track so far; cleared when the ride ends.
+    auto save_active = [engine, recorder, store] {
+        if (!store->ok()) return;
+        if (engine->state() == core::RideState::Idle) {
+            store->clear_active();
+            return;
+        }
+        core::ActiveRide a;
+        a.engine = engine->snapshot();
+        a.track = recorder->points();
+        a.saved_at = std::time(nullptr);
+        store->save_active(a);
+    };
+    g_flush_active = save_active; // interposed onPause flushes through this
+
+    // Resume an interrupted ride left over from a previous run.
+    core::ActiveRide resumed;
+    if (store->ok() && store->load_active(resumed)) {
+        engine->restore(resumed.engine);
+        recorder->restore(std::move(resumed.track));
+        auto &w = *ui;
+        w.set_ride_state((int)engine->state());
+        publish_live(w, engine->live(), sensors);
+        w.set_live_elev_path(slint::SharedString(
+            core::elevation_profile_path(recorder->points(), 160, 60)));
+        w.set_live_elev_label(slint::SharedString(
+            "ELEV +" +
+            core::fmt::fmt0(core::elevation_gain_m(recorder->points())) + " m"));
+#if defined(CYCLOMP_MAP_GL)
+        std::vector<std::pair<double, double>> pts;
+        pts.reserve(recorder->points().size());
+        for (const auto &tp : recorder->points())
+            pts.emplace_back(tp.lat, tp.lon);
+        if (pts.size() >= 2) mapgl::set_track(std::move(pts));
+#endif
+    }
 
     // Tap on a history row: open the ride-detail page (screen 3).
     ui->on_select_session([ui = slint::ComponentWeakHandle(ui), log](int i) {
@@ -590,7 +676,8 @@ int main(int, char **)
         (void)current_position;
 #endif
     });
-    publish_idle(*ui, sensors);
+    // Don't clobber a ride resumed above; only reset the view when truly idle.
+    if (engine->state() == core::RideState::Idle) publish_idle(*ui, sensors);
     publish_nav(*ui);
 
     // Debug: start on a given screen (0 ride / 1 map / 2 history).
@@ -861,7 +948,7 @@ int main(int, char **)
 #endif
     ui->on_toggle_ride(
         [ui = slint::ComponentWeakHandle(ui), mock, engine, camera, sensors,
-         publish_nav, on_ride_start, recorder] {
+         publish_nav, on_ride_start, recorder, save_active] {
             auto u = ui.lock();
             if (!u) return;
             auto &w = **u;
@@ -880,12 +967,15 @@ int main(int, char **)
                 w.set_map_following(true);
             }
             w.set_ride_state((int)engine->toggle());
+            // Persist immediately: START, and especially HOLD (the moment
+            // before the user switches to another app).
+            save_active();
         });
 
     // Finalize the ride: save a summary row, then return to idle.
     ui->on_stop_ride(
         [ui = slint::ComponentWeakHandle(ui), engine, log, sessions, sensors,
-         publish_nav, recorder] {
+         publish_nav, recorder, store] {
             auto u = ui.lock();
             if (!u) return;
             auto &w = **u;
@@ -894,8 +984,12 @@ int main(int, char **)
                 s->track = recorder->points();
                 log->add(*s);
                 sessions->insert(0, to_row(*s)); // newest first
-                core::save_sessions(sessions_path(), *log);
+                if (store->ok())
+                    store->add_session(*s); // atomic append, no full rewrite
+                else
+                    core::save_sessions(sessions_path(), *log);
             }
+            if (store->ok()) store->clear_active(); // ride finished
             publish_idle(w, sensors);
             publish_nav(w);
             w.set_selected_session(-1);
@@ -908,7 +1002,7 @@ int main(int, char **)
         [ui = slint::ComponentWeakHandle(ui), source, engine, camera, cam_sink,
          sensors, publish_nav, publish_marker, recorder, heading_up,
          last_course, last_sent_bearing, replay_active, current_position,
-         settings, compass_elapsed, map_3d, map_pitch_applied] {
+         settings, compass_elapsed, map_3d, map_pitch_applied, save_active] {
             (void)compass_elapsed;
             (void)settings; // consumed only in the Android heading-up block
             (void)map_3d;
@@ -1025,6 +1119,13 @@ int main(int, char **)
                 }
                 if (s.heading_deg) *last_course = *s.heading_deg;
                 if (auto up = camera->on_position(s.lat, s.lon)) cam_sink(*up);
+            }
+            // Snapshot the running ride every ~10 s so an unexpected kill
+            // (no HOLD, no onPause) loses at most a few seconds of track.
+            static int autosave_tick = 0;
+            if (++autosave_tick >= 20) {
+                autosave_tick = 0;
+                save_active();
             }
         });
 

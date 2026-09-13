@@ -24,6 +24,8 @@ public:
     void add(double lat, double lon, double speed_kmh, double t_s,
              double alt_m = 0);
     void reset() { pts_.clear(); }
+    // Bulk-restore a recorded path (resuming a persisted in-progress ride).
+    void restore(std::vector<TrackPoint> pts) { pts_ = std::move(pts); }
     const std::vector<TrackPoint> &points() const { return pts_; }
 
 private:

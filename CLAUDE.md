@@ -35,6 +35,13 @@ src/core/            PURE C++ (no Slint/mbgl/Android includes). Unit-tested.
   mock_telemetry     the fake ride (desktop + CYCLOMP_MOCK_RIDE=1 on Android)
   follow_camera      camera follow/release/first-fire decisions
   track / session_store / format   recording, persistence, SVG-path charts
+  session_db         SQLite store (sqlite3 amalgamation is already linked via
+                     mbgl: android libmbgl-vendor-sqlite.a, desktop system
+                     -lsqlite3). Finished rides + ONE in-progress ride
+                     (active_ride table). Crash-safe txns; migrates the legacy
+                     sessions.txt in once. RideEngine::snapshot/restore lets a
+                     held ride survive a background kill (save on HOLD + every
+                     ~10s + interposed onPause flush; resumed at launch)
 src/main.cpp         THIN GLUE ONLY: constructs core objects, wires Slint
                      callbacks, 500 ms slint::Timer = sample→tick→publish.
                      Also the interposed ANativeActivity_onCreate (see below).

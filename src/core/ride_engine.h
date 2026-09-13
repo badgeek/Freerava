@@ -57,6 +57,18 @@ public:
 
     const LiveStats &live() const { return live_; }
 
+    // Full internal state, so an interrupted ride can be persisted and later
+    // restored byte-for-byte (survives the app being killed in the background).
+    struct Snapshot {
+        int state = 0; // RideState
+        LiveStats live{};
+        double sum_speed = 0, max_kmh = 0;
+        long sum_hr = 0, sum_cad = 0;
+        int samples = 0, hr_samples = 0, cad_samples = 0;
+    };
+    Snapshot snapshot() const;
+    void restore(const Snapshot &s);
+
 private:
     void reset_stats();
 
