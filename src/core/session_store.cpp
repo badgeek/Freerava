@@ -16,8 +16,8 @@ bool save_sessions(const std::string &path, const SessionLog &log) {
                      s.max_kmh, s.avg_cadence, s.has_cadence ? 1 : 0,
                      s.avg_hr, s.has_hr ? 1 : 0, s.track.size());
         for (const TrackPoint &p : s.track)
-            std::fprintf(f, "P %.7f %.7f %.3f %.3f\n", p.lat, p.lon,
-                         (double)p.speed_kmh, (double)p.t_s);
+            std::fprintf(f, "P %.7f %.7f %.3f %.3f %.2f\n", p.lat, p.lon,
+                         (double)p.speed_kmh, (double)p.t_s, (double)p.alt_m);
     }
     std::fclose(f);
     return true;
@@ -41,12 +41,15 @@ bool load_sessions(const std::string &path, SessionLog &out) {
         s.track.clear();
         s.track.reserve(n);
         for (size_t i = 0; i < n; ++i) {
-            double lat, lon, sp, t;
-            if (std::fscanf(f, "P %lf %lf %lf %lf\n", &lat, &lon, &sp, &t) != 4) {
+            double lat, lon, sp, t, alt = 0;
+            int got = std::fscanf(f, "P %lf %lf %lf %lf %lf\n", &lat, &lon,
+                                  &sp, &t, &alt);
+            if (got == 4) alt = 0; // pre-altitude files
+            else if (got != 5) {
                 std::fclose(f);
                 return false; // truncated file
             }
-            s.track.push_back({lat, lon, (float)sp, (float)t});
+            s.track.push_back({lat, lon, (float)sp, (float)t, (float)alt});
         }
         out.add(s);
     }

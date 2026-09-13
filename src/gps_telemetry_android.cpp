@@ -229,6 +229,10 @@ void AndroidTelemetrySource::poll() {
             e->CallBooleanMethod(loc, e->GetMethodID(locCls, "hasSpeed", "()Z"));
         double speed_mps =
             has_speed ? e->CallFloatMethod(loc, e->GetMethodID(locCls, "getSpeed", "()F")) : 0.0;
+        jboolean has_alt =
+            e->CallBooleanMethod(loc, e->GetMethodID(locCls, "hasAltitude", "()Z"));
+        double alt_m =
+            has_alt ? e->CallDoubleMethod(loc, e->GetMethodID(locCls, "getAltitude", "()D")) : 0.0;
         if (cleared(e)) break;
 
         jclass sysCls = e->FindClass("java/lang/System");
@@ -272,6 +276,8 @@ void AndroidTelemetrySource::poll() {
         }
         lat_ = lat;
         lon_ = lon;
+        have_alt_ = has_alt;
+        alt_m_ = alt_m;
         have_fix_ = true;
         char msg[96];
         std::snprintf(msg, sizeof msg, "fix acquired (±%.0f m)", acc);
@@ -288,6 +294,7 @@ core::Sample AndroidTelemetrySource::sample(double) {
     s.speed_kmh = speed_kmh_;
     s.lat = lat_;
     s.lon = lon_;
+    if (have_alt_) s.altitude_m = alt_m_;
     // No heart-rate or cadence sensors yet — the UI renders these as "--".
     return s;
 }

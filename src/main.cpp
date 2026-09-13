@@ -246,6 +246,11 @@ int main(int, char **)
             slint::SharedString(core::speed_sparkline_path(rows[i].track, 300, 70)));
         w.set_sel_track_path(
             slint::SharedString(core::track_shape_path(rows[i].track, 300, 120)));
+        w.set_sel_elev_path(slint::SharedString(
+            core::elevation_profile_path(rows[i].track, 300, 70)));
+        w.set_sel_elev_label(slint::SharedString(
+            "ELEV +" + core::fmt::fmt0(core::elevation_gain_m(rows[i].track)) +
+            " m"));
         w.set_selected_session(i);
         w.set_detail_tab(0);
         w.set_replay_playing(false);
@@ -613,7 +618,8 @@ int main(int, char **)
             publish_live(w, engine->live(), sensors);
             if (s.valid) {
                 recorder->add(s.lat, s.lon, s.speed_kmh,
-                              engine->live().elapsed_s);
+                              engine->live().elapsed_s,
+                              s.altitude_m.value_or(0.0));
 #if defined(CYCLOMP_MAP_GL)
                 // Refresh the route line every other point (~1 Hz).
                 if (recorder->points().size() % 2 == 0) {

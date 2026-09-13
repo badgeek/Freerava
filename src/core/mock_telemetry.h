@@ -34,6 +34,7 @@ private:
     double lat_ = -6.9147;             // Bandung
     double lon_ = 107.6098;
     double heading_deg_ = 90.0;
+    double alt_m_ = 715.0;             // Bandung-ish; wanders like hills
     int nav_m_ = 400;                  // metres to next (mock) turn
 };
 

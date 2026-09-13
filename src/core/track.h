@@ -11,7 +11,8 @@ struct TrackPoint {
     double lat = 0;
     double lon = 0;
     float speed_kmh = 0;
-    float t_s = 0; // moving time at this point
+    float t_s = 0;   // moving time at this point
+    float alt_m = 0; // 0 when the source has no altitude
 };
 
 // Collects points during a ride; halves itself when the cap is reached so
@@ -20,7 +21,8 @@ class TrackRecorder {
 public:
     static constexpr size_t kMaxPoints = 4096;
 
-    void add(double lat, double lon, double speed_kmh, double t_s);
+    void add(double lat, double lon, double speed_kmh, double t_s,
+             double alt_m = 0);
     void reset() { pts_.clear(); }
     const std::vector<TrackPoint> &points() const { return pts_; }
 
@@ -37,5 +39,14 @@ std::string speed_sparkline_path(const std::vector<TrackPoint> &pts,
 // centred, lon scaled by cos(mid-lat). Empty when fewer than 2 points.
 std::string track_shape_path(const std::vector<TrackPoint> &pts,
                              double w, double h);
+
+// Altitude-over-time profile; the vertical scale is padded to at least 8 m
+// so a flat ride doesn't zoom into GPS noise. Empty when < 2 points.
+std::string elevation_profile_path(const std::vector<TrackPoint> &pts,
+                                   double w, double h);
+
+// Total climb: the sum of positive altitude steps above a small noise
+// threshold (0.3 m per sample).
+double elevation_gain_m(const std::vector<TrackPoint> &pts);
 
 } // namespace core

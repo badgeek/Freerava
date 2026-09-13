@@ -21,11 +21,17 @@ Sample MockTelemetrySource::sample(double dt_s) {
     nav_m_ -= (int)std::lround(d_km * 1000.0);
     if (nav_m_ <= 0) nav_m_ = 400 + (int)(rng_.next() * 800.f);
 
+    // Gentle hills.
+    alt_m_ += rng_.centered() * 1.6;
+    if (alt_m_ < 650.0) alt_m_ = 650.0;
+    if (alt_m_ > 1100.0) alt_m_ = 1100.0;
+
     Sample s;
     s.valid = true;
     s.speed_kmh = speed_;
     s.lat = lat_;
     s.lon = lon_;
+    s.altitude_m = alt_m_;
     // Heart rate tracks effort with jitter; cadence derives from speed.
     s.heart_rate = (int)std::lround(90 + speed_ * 1.9 + rng_.centered() * 6.f);
     s.cadence = speed_ > 0 ? (int)std::lround(speed_ * 2.4 + 12) : 0;

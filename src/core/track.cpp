@@ -6,7 +6,8 @@
 
 namespace core {
 
-void TrackRecorder::add(double lat, double lon, double speed_kmh, double t_s) {
+void TrackRecorder::add(double lat, double lon, double speed_kmh, double t_s,
+                        double alt_m) {
     if (pts_.size() >= kMaxPoints) {
         // Halve: keep every second point (coarse LOD, order preserved).
         std::vector<TrackPoint> half;
@@ -14,7 +15,7 @@ void TrackRecorder::add(double lat, double lon, double speed_kmh, double t_s) {
         for (size_t i = 0; i < pts_.size(); i += 2) half.push_back(pts_[i]);
         pts_.swap(half);
     }
-    pts_.push_back({lat, lon, (float)speed_kmh, (float)t_s});
+    pts_.push_back({lat, lon, (float)speed_kmh, (float)t_s, (float)alt_m});
 }
 
 namespace {
@@ -69,6 +70,41 @@ std::string track_shape_path(const std::vector<TrackPoint> &pts,
         append_pt(out, i == 0, x, y);
     }
     return out;
+}
+
+std::string elevation_profile_path(const std::vector<TrackPoint> &pts,
+                                   double w, double h) {
+    if (pts.size() < 2) return {};
+    float lo = pts[0].alt_m, hi = pts[0].alt_m;
+    for (auto &p : pts) {
+        lo = std::min(lo, p.alt_m);
+        hi = std::max(hi, p.alt_m);
+    }
+    // Pad the vertical scale so flat rides don't zoom into noise.
+    if (hi - lo < 8.f) {
+        float mid = (hi + lo) / 2.f;
+        lo = mid - 4.f;
+        hi = mid + 4.f;
+    }
+    double t0 = pts.front().t_s;
+    double t1 = std::max((double)pts.back().t_s, t0 + 1.0);
+    std::string out;
+    out.reserve(pts.size() * 14);
+    for (size_t i = 0; i < pts.size(); ++i) {
+        double x = (pts[i].t_s - t0) / (t1 - t0) * w;
+        double y = h - (pts[i].alt_m - lo) / (hi - lo) * (h - 2.0) - 1.0;
+        append_pt(out, i == 0, x, y);
+    }
+    return out;
+}
+
+double elevation_gain_m(const std::vector<TrackPoint> &pts) {
+    double gain = 0;
+    for (size_t i = 1; i < pts.size(); ++i) {
+        double d = pts[i].alt_m - pts[i - 1].alt_m;
+        if (d > 0.3) gain += d;
+    }
+    return gain;
 }
 
 } // namespace core

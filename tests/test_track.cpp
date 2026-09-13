@@ -55,6 +55,37 @@ TEST_CASE("track shape path stays inside the viewbox") {
     CHECK(n == 50);
 }
 
+TEST_CASE("elevation gain sums positive steps above the noise floor") {
+    std::vector<TrackPoint> pts = {
+        {0, 0, 0, 0, 700.f},  {0, 0, 0, 1, 705.f},  // +5
+        {0, 0, 0, 2, 705.2f},                       // +0.2 (noise, ignored)
+        {0, 0, 0, 3, 702.f},                        // downhill, ignored
+        {0, 0, 0, 4, 710.f},                        // +8
+    };
+    CHECK(elevation_gain_m(pts) == doctest::Approx(13.0).epsilon(0.01));
+    CHECK(elevation_gain_m({}) == doctest::Approx(0));
+}
+
+TEST_CASE("elevation profile pads a flat ride") {
+    std::vector<TrackPoint> flat = {
+        {0, 0, 0, 0, 700.f}, {0, 0, 0, 10, 700.4f}, {0, 0, 0, 20, 700.2f}};
+    auto p = elevation_profile_path(flat, 300, 70);
+    REQUIRE(!p.empty());
+    // With the 8m pad, a 0.4m wiggle must stay well inside the box: every y
+    // is near the middle (not clamped to 1 / 69).
+    double x, y;
+    const char *c = p.c_str();
+    while (*c) {
+        if ((*c == 'M' || *c == 'L') &&
+            std::sscanf(c + 1, "%lf %lf", &x, &y) == 2) {
+            CHECK(y > 20.0);
+            CHECK(y < 50.0);
+        }
+        ++c;
+    }
+    CHECK(elevation_profile_path({flat[0]}, 300, 70).empty());
+}
+
 TEST_CASE("session store round-trip with tracks") {
     SessionLog log;
     SessionSummary a;
@@ -65,7 +96,8 @@ TEST_CASE("session store round-trip with tracks") {
     a.max_kmh = 30;
     a.has_hr = true;
     a.avg_hr = 140;
-    a.track = {{-6.9, 107.6, 12.f, 0.f}, {-6.901, 107.601, 18.f, 5.f}};
+    a.track = {{-6.9, 107.6, 12.f, 0.f, 701.f},
+               {-6.901, 107.601, 18.f, 5.f, 703.5f}};
     SessionSummary b;
     b.ended_at = 200; // newer, no channels, no track
     log.add(a);
@@ -87,6 +119,7 @@ TEST_CASE("session store round-trip with tracks") {
     REQUIRE(ra.track.size() == 2);
     CHECK(ra.track[1].lat == doctest::Approx(-6.901));
     CHECK(ra.track[1].speed_kmh == doctest::Approx(18.f));
+    CHECK(ra.track[1].alt_m == doctest::Approx(703.5f));
     CHECK_FALSE(back.newest_first()[0].has_hr);
     CHECK(back.newest_first()[0].track.empty());
 }

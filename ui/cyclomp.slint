@@ -170,6 +170,8 @@ export component AppWindow inherits Window {
     // command strings (300x70 sparkline viewbox, 300x120 track viewbox).
     in property <string> sel-speed-path;
     in property <string> sel-track-path;
+    in property <string> sel-elev-path;
+    in property <string> sel-elev-label: "ELEV +0 m";
     callback select-session(int); // opens the ride-detail page (screen 3)
 
     // ---- Ride-detail page (screen 3) ----
@@ -868,6 +870,40 @@ export component AppWindow inherits Window {
                         viewbox-height: 70;
                     }
                     if root.sel-speed-path == "" : Text {
+                        text: "NO DATA";
+                        color: Palette.mute;
+                        font-size: 11px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                Rectangle {
+                    height: 140px;
+                    background: Palette.ash;
+                    Text {
+                        x: 10px;
+                        y: 8px;
+                        text: root.sel-elev-label;
+                        color: Palette.mute;
+                        font-size: 10px;
+                        font-weight: 700;
+                        letter-spacing: 1px;
+                    }
+                    if root.sel-elev-path != "" : Path {
+                        x: 10px;
+                        y: 12px;
+                        width: parent.width - 20px;
+                        height: parent.height - 24px;
+                        commands: root.sel-elev-path;
+                        stroke: Palette.red;
+                        stroke-width: 2px;
+                        viewbox-x: 0;
+                        viewbox-y: 0;
+                        viewbox-width: 300;
+                        viewbox-height: 70;
+                    }
+                    if root.sel-elev-path == "" : Text {
                         text: "NO DATA";
                         color: Palette.mute;
                         font-size: 11px;
