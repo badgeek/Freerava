@@ -5,6 +5,8 @@
 #include "cyclomp.h"
 
 #include "core/format.h"
+#include "core/mock_telemetry.h"
+#include "core/ride_engine.h"
 
 #ifdef CYCLOMP_HAVE_MAPLIBRE
 #include "map_service.h"
@@ -26,86 +28,6 @@
 
 namespace {
 
-// Ride lifecycle, mirrored in the UI's `ride-state`.
-enum RideState : int { Idle = 0, Running = 1, Paused = 2 };
-
-// Tiny deterministic PRNG (no <random> pulled in for a mock).
-struct Rng {
-    uint32_t s = 0x9e3779b9u;
-    float next() { // [0,1)
-        s ^= s << 13; s ^= s >> 17; s ^= s << 5;
-        return (s >> 8) * (1.0f / 16777216.0f);
-    }
-    float centered() { return next() - 0.5f; } // [-0.5,0.5)
-};
-
-struct RideModel {
-    Rng rng;
-    float elapsed_s = 0.f; // moving seconds (pauses excluded)
-    float dist_km   = 0.f;
-    float speed     = 0.f; // km/h
-    float max_speed = 0.f;
-    float sum_speed = 0.f;
-    long  sum_cad   = 0;
-    long  sum_hr    = 0;
-    int   heart_rate = 72;
-    int   samples   = 0;
-    int   nav_m     = 400; // metres to next turn
-
-    // Mock position (Bandung); wanders while riding. Survives reset() so
-    // consecutive rides continue from where the last one ended.
-    double lat = -6.9147;
-    double lon = 107.6098;
-    float  heading_deg = 90.f;
-
-    void reset() {
-        elapsed_s = 0.f;
-        dist_km = 0.f;
-        speed = 0.f;
-        max_speed = 0.f;
-        sum_speed = 0.f;
-        sum_cad = 0;
-        sum_hr = 0;
-        heart_rate = 72;
-        samples = 0;
-        nav_m = 400;
-    }
-
-    void tick(float dt_s) {
-        elapsed_s += dt_s;
-
-        // Speed random-walk, clamped to a sane cycling range.
-        speed += rng.centered() * 6.f;
-        if (speed < 8.f)  speed = 8.f;
-        if (speed > 42.f) speed = 42.f;
-        if (speed > max_speed) max_speed = speed;
-
-        // Wander the mock position along a slowly-turning heading.
-        heading_deg += rng.centered() * 24.f;
-        double d_km = speed * (dt_s / 3600.f);
-        double rad = heading_deg * M_PI / 180.0;
-        lat += (d_km * std::cos(rad)) / 111.32;
-        lon += (d_km * std::sin(rad)) / (111.32 * std::cos(lat * M_PI / 180.0));
-
-        dist_km   += speed * (dt_s / 3600.f);
-        sum_speed += speed;
-        sum_cad   += cadence();
-        samples   += 1;
-
-        // Heart rate tracks effort (speed) with jitter.
-        heart_rate = (int)std::lround(90 + speed * 1.9f + rng.centered() * 6.f);
-        sum_hr += heart_rate;
-
-        nav_m -= (int)std::lround(speed * (dt_s / 3600.f) * 1000.f);
-        if (nav_m <= 0) nav_m = 400 + (int)(rng.next() * 800.f);
-    }
-
-    float avg() const { return samples ? sum_speed / samples : 0.f; }
-    int   avg_cadence() const { return samples ? (int)(sum_cad / samples) : 0; }
-    int   avg_hr() const { return samples ? (int)(sum_hr / samples) : 0; }
-    int   cadence() const { return speed > 0 ? (int)std::lround(speed * 2.4f + 12) : 0; }
-};
-
 // Thin SharedString wrappers over the unit-tested core formatters.
 slint::SharedString fmt1(float v) { return slint::SharedString(core::fmt::fmt1(v)); }
 slint::SharedString fmt0(float v) { return slint::SharedString(core::fmt::fmt0(v)); }
@@ -116,17 +38,29 @@ slint::SharedString date_label() {
     return slint::SharedString(core::fmt::date_label(std::time(nullptr)));
 }
 
-// Push the model's live values into the UI.
-void publish_live(AppWindow &w, const RideModel &m) {
-    w.set_speed(m.speed);
-    w.set_distance(fmt1(m.dist_km));
+// Push the engine's live values into the UI.
+void publish_live(AppWindow &w, const core::LiveStats &m, int nav_m) {
+    w.set_speed((float)m.speed_kmh);
+    w.set_distance(fmt1((float)m.dist_km));
     w.set_ride_time(mmss((int)m.elapsed_s));
-    w.set_avg_speed(m.avg());
-    w.set_cadence(m.cadence());
+    w.set_avg_speed((float)m.avg_kmh);
+    w.set_cadence(m.cadence);
     w.set_heart_rate(m.heart_rate);
-    int hr = m.heart_rate;
-    w.set_hr_zone(hr < 105 ? 1 : hr < 125 ? 2 : hr < 145 ? 3 : hr < 165 ? 4 : 5);
-    w.set_nav_distance(metres(m.nav_m));
+    w.set_hr_zone(core::hr_zone(m.heart_rate));
+    w.set_nav_distance(metres(nav_m));
+}
+
+// The only place session numbers become strings.
+SessionRow to_row(const core::SessionSummary &s) {
+    return SessionRow{
+        slint::SharedString(core::fmt::date_label(s.ended_at)),
+        fmt1((float)s.dist_km),
+        mmss((int)s.moving_s),
+        fmt0((float)s.avg_kmh),
+        fmt0((float)s.max_kmh),
+        s.has_cadence ? fmt_int(s.avg_cadence) : slint::SharedString("--"),
+        s.has_hr ? fmt_int(s.avg_hr) : slint::SharedString("--"),
+    };
 }
 
 // Reset the live view to a resting/idle state.
@@ -183,7 +117,9 @@ int main(int, char **)
 #endif
 {
     auto ui = AppWindow::create();
-    auto model = std::make_shared<RideModel>();
+    auto source = std::make_shared<core::MockTelemetrySource>();
+    auto engine = std::make_shared<core::RideEngine>();
+    auto log = std::make_shared<core::SessionLog>();
 
     // History of finished rides, newest first. In-memory for the mock.
     auto sessions = std::make_shared<slint::VectorModel<SessionRow>>();
@@ -202,15 +138,16 @@ int main(int, char **)
         bool follow = true; // pan/pinch releases the camera; START re-locks
         bool first = true;  // the first push also sets the initial zoom
         double zoom = 15.0;
-        void push(const RideModel &m) {
+        void push(double lat, double lon) {
 #if defined(CYCLOMP_MAP_GL)
             if (!follow && !first) return;
-            mapgl::set_camera(m.lat, m.lon, first ? zoom : -1.0);
+            mapgl::set_camera(lat, lon, first ? zoom : -1.0);
             first = false;
 #elif defined(CYCLOMP_HAVE_MAPLIBRE)
-            if (service) service->set_camera(m.lat, m.lon, zoom);
+            if (service) service->set_camera(lat, lon, zoom);
 #else
-            (void)m;
+            (void)lat;
+            (void)lon;
 #endif
         }
     };
@@ -254,7 +191,7 @@ int main(int, char **)
                                 (int)*err);
         }
     }
-    map_hook->push(*model); // initial camera
+    map_hook->push(source->lat(), source->lon()); // initial camera
 #elif defined(CYCLOMP_HAVE_MAPLIBRE)
     map_hook->service = std::make_unique<MapService>(
         480, 720,
@@ -272,15 +209,17 @@ int main(int, char **)
                 });
         });
     ui->set_map_available(true);
-    map_hook->push(*model); // initial frame
+    map_hook->push(source->lat(), source->lon()); // initial frame
 #endif
-    ui->on_map_zoom([model, map_hook](int delta) {
+    ui->on_map_zoom([source, map_hook](int delta) {
 #if defined(CYCLOMP_MAP_GL)
+        (void)source;
         mapgl::zoom_step(delta);
 #elif defined(CYCLOMP_HAVE_MAPLIBRE)
         map_hook->zoom = std::clamp(map_hook->zoom + delta, 3.0, 19.0);
         if (map_hook->service)
-            map_hook->service->set_camera(model->lat, model->lon, map_hook->zoom);
+            map_hook->service->set_camera(source->lat(), source->lon(),
+                                          map_hook->zoom);
 #else
         (void)delta;
 #endif
@@ -303,62 +242,49 @@ int main(int, char **)
     }
 #endif
 
-    // idle -> start (fresh session) | running -> pause | paused -> resume
-    ui->on_toggle_ride([ui = slint::ComponentWeakHandle(ui), model, map_hook] {
-        auto u = ui.lock();
-        if (!u) return;
-        auto &w = **u;
-        switch (w.get_ride_state()) {
-        case Idle:
-            model->reset();
-            publish_idle(w);
-            map_hook->follow = true; // re-lock the camera onto the rider
-            w.set_ride_state(Running);
-            break;
-        case Running:
-            w.set_ride_state(Paused);
-            break;
-        default:
-            w.set_ride_state(Running);
-            break;
-        }
-    });
+    // idle -> start (fresh session) | running -> pause | paused -> resume.
+    // The engine owns the state machine; the UI property just mirrors it.
+    ui->on_toggle_ride(
+        [ui = slint::ComponentWeakHandle(ui), source, engine, map_hook] {
+            auto u = ui.lock();
+            if (!u) return;
+            auto &w = **u;
+            if (engine->state() == core::RideState::Idle) {
+                source->reset_ride();
+                publish_idle(w);
+                map_hook->follow = true; // re-lock the camera onto the rider
+            }
+            w.set_ride_state((int)engine->toggle());
+        });
 
     // Finalize the ride: save a summary row, then return to idle.
-    ui->on_stop_ride([ui = slint::ComponentWeakHandle(ui), model, sessions] {
-        auto u = ui.lock();
-        if (!u) return;
-        auto &w = **u;
-        if (w.get_ride_state() == Idle) return;
-        if (model->samples > 0) {
-            SessionRow row {
-                date_label(),
-                fmt1(model->dist_km),
-                mmss((int)model->elapsed_s),
-                fmt0(model->avg()),
-                fmt0(model->max_speed),
-                fmt_int(model->avg_cadence()),
-                fmt_int(model->avg_hr()),
-            };
-            sessions->insert(0, row); // newest first
-        }
-        model->reset();
-        publish_idle(w);
-        w.set_selected_session(-1);
-        w.set_ride_state(Idle);
-    });
+    ui->on_stop_ride(
+        [ui = slint::ComponentWeakHandle(ui), engine, log, sessions] {
+            auto u = ui.lock();
+            if (!u) return;
+            auto &w = **u;
+            if (engine->state() == core::RideState::Idle) return;
+            if (auto s = engine->stop(std::time(nullptr))) {
+                log->add(*s);
+                sessions->insert(0, to_row(*s)); // newest first
+            }
+            publish_idle(w);
+            w.set_selected_session(-1);
+            w.set_ride_state((int)engine->state());
+        });
 
     // ~500 ms telemetry tick; only advances while RUNNING (pause freezes all).
     static slint::Timer timer;
     timer.start(slint::TimerMode::Repeated, std::chrono::milliseconds(500),
-        [ui = slint::ComponentWeakHandle(ui), model, map_hook] {
+        [ui = slint::ComponentWeakHandle(ui), source, engine, map_hook] {
             auto u = ui.lock();
             if (!u) return;
             auto &w = **u;
-            if (w.get_ride_state() != Running) return;
-            model->tick(0.5f);
-            publish_live(w, *model);
-            map_hook->push(*model);
+            if (engine->state() != core::RideState::Running) return;
+            auto s = source->sample(0.5);
+            engine->tick(0.5, s);
+            publish_live(w, engine->live(), source->nav_m());
+            map_hook->push(s.lat, s.lon);
         });
 
 #if defined(CYCLOMP_MAP_GL)
