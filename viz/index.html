@@ -152,6 +152,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
+import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 
 const COL = {
   bg: 0xeef0f3, grid: 0xd7dce2, grid2: 0xe4e8ed,
@@ -268,14 +270,20 @@ function gridTexture() {
     }
     x.stroke();
   };
-  // Self-healing cutting-mat look: dark green field with pale mat lines.
-  x.fillStyle = '#1f4034'; x.fillRect(0, 0, s, s);
-  line(1, 'rgba(198,226,210,0.20)', 1);  // minor
-  line(8, 'rgba(214,238,224,0.42)', 2);  // major
-  const fade = x.createRadialGradient(s / 2, s / 2, s * 0.08, s / 2, s / 2, s / 2);
-  fade.addColorStop(0.00, 'rgba(0,0,0,1)');
-  fade.addColorStop(0.55, 'rgba(0,0,0,0.92)');
-  fade.addColorStop(0.86, 'rgba(0,0,0,0.30)');
+  // Self-healing cutting-mat look: muted green field with pale mat lines.
+  x.fillStyle = '#436b5c'; x.fillRect(0, 0, s, s);
+  line(1, 'rgba(210,232,220,0.22)', 1);  // minor
+  line(8, 'rgba(226,244,234,0.40)', 2);  // major
+  // Long, gradual falloff — a short one showed up as a hard dark disc sitting
+  // on the light backdrop. Starts easing almost immediately and never has a
+  // visible rim.
+  const fade = x.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+  fade.addColorStop(0.00, 'rgba(0,0,0,0.78)');
+  fade.addColorStop(0.22, 'rgba(0,0,0,0.66)');
+  fade.addColorStop(0.42, 'rgba(0,0,0,0.46)');
+  fade.addColorStop(0.60, 'rgba(0,0,0,0.26)');
+  fade.addColorStop(0.76, 'rgba(0,0,0,0.11)');
+  fade.addColorStop(0.90, 'rgba(0,0,0,0.03)');
   fade.addColorStop(1.00, 'rgba(0,0,0,0)');
   x.globalCompositeOperation = 'destination-in';
   x.fillStyle = fade; x.fillRect(0, 0, s, s);
@@ -874,10 +882,16 @@ function refreshTerrain(g) {
     push(cx + pos.getX(a), bottom, cz + pos.getZ(a),
          cx + pos.getX(b), bottom, cz + pos.getZ(b));
   }
-  const og = new THREE.BufferGeometry();
-  og.setAttribute('position', new THREE.BufferAttribute(new Float32Array(ow), 3));
-  g.outline = new THREE.LineSegments(og, new THREE.LineBasicMaterial({
-    color: 0xffffff, transparent: true, opacity: 0.9, fog: false }));
+  // Fat lines (LineSegments2): WebGL ignores linewidth on THREE.LineSegments,
+  // so a plain line material can never be thicker than 1px.
+  const og = new LineSegmentsGeometry();
+  og.setPositions(ow);
+  const omat = new LineMaterial({ color: 0xffffff, linewidth: 3.5,
+    worldUnits: false, transparent: true, opacity: 0.95, fog: false });
+  omat.resolution.set(innerWidth, innerHeight);
+  g.outline = new LineSegments2(og, omat);
+  g.outline.computeLineDistances();
+  g.outlineMat = omat;   // kept so resize() can refresh its resolution
   g.outline.renderOrder = 2;
   g.slab.add(g.outline);
 
@@ -1328,6 +1342,7 @@ function resize() {
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
   if (ride?.mat) ride.mat.resolution.set(innerWidth, innerHeight);
+  if (ride?.outlineMat) ride.outlineMat.resolution.set(innerWidth, innerHeight);
 }
 addEventListener('resize', resize); resize();
 </script>
