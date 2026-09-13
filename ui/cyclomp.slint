@@ -1,17 +1,20 @@
-// cyclomp — Bauhaus bike-computer dashboard (mock)
-// Shared UI: renders on desktop (C++ preview) and Android (C++ NDK / Slint android-activity).
+// cyclomp — Nostromo-class console UI (Alien '79 / MU-TH-UR 6000 aesthetic).
+// Shared UI: renders on desktop (C++ preview) and Android (C++ NDK / Slint
+// android-activity). The C++ contract (properties, callbacks, structs) is
+// identical to the previous Bauhaus skin — only the visual layer changed.
 
 import { ListView } from "std-widgets.slint";
 
-// ---- Bauhaus palette ----
+// ---- CRT phosphor palette ----
 global Palette {
-    out property <color> ink: #0d0d0d;      // near-black background
-    out property <color> paper: #f4f1e9;    // bone white
-    out property <color> yellow: #f3c500;
-    out property <color> red: #e2231a;
-    out property <color> blue: #1457b8;
-    out property <color> ash: #2a2a2a;      // panel fill
-    out property <color> mute: #8a8a8a;
+    out property <color> ink: #030503;     // dead CRT glass
+    out property <color> phos: #4dff70;    // green phosphor
+    out property <color> dim: #2f7a42;     // faded phosphor
+    out property <color> amber: #ffb000;   // amber data channel
+    out property <color> red: #ff3b2f;     // alert
+    out property <color> cyan: #23b5aa;    // secondary channel
+    out property <color> panel: #060d07;   // panel fill
+    out property <color> line: #1b4527;    // frame lines
 }
 
 // A finished ride, provided by C++ (newest first).
@@ -25,92 +28,25 @@ export struct SessionRow {
     hr: string,       // bpm
 }
 
-// A metric tile: small label on top, big value, small unit.
-component MetricTile inherits Rectangle {
-    in property <string> label;
-    in property <string> value;
-    in property <string> unit;
-    in property <color> accent: Palette.paper;
-    background: Palette.ash;
-    VerticalLayout {
-        padding: 12px;
-        spacing: 2px;
-        Text {
-            text: root.label;
-            color: Palette.mute;
-            font-size: 12px;
+// Thin-framed console panel with a caption riding the top border.
+component TermPanel inherits Rectangle {
+    in property <string> caption;
+    background: Palette.panel;
+    border-width: 1px;
+    border-color: Palette.line;
+    if root.caption != "" : Rectangle {
+        x: 10px;
+        y: -6px;
+        width: cap.preferred-width + 12px;
+        height: 12px;
+        background: Palette.ink;
+        cap := Text {
+            width: 100%;
+            height: 100%;
+            text: root.caption;
+            color: Palette.dim;
+            font-size: 9px;
             font-weight: 700;
-            letter-spacing: 1px;
-        }
-        HorizontalLayout {
-            alignment: start;
-            spacing: 4px;
-            Text {
-                text: root.value;
-                color: root.accent;
-                font-size: 34px;
-                font-weight: 900;
-                vertical-alignment: center;
-            }
-            Text {
-                text: root.unit;
-                color: Palette.mute;
-                font-size: 13px;
-                font-weight: 700;
-                vertical-alignment: bottom;
-            }
-        }
-    }
-}
-
-// Status strip: GPS state on Android, mock nav on desktop.
-component NavStrip inherits Rectangle {
-    in property <string> instruction;
-    in property <string> distance;
-    background: Palette.yellow;
-    height: 76px;
-    HorizontalLayout {
-        padding: 16px;
-        spacing: 16px;
-        alignment: start;
-        VerticalLayout {
-            alignment: center;
-            spacing: 2px;
-            Text {
-                text: root.distance;
-                color: Palette.ink;
-                font-size: 20px;
-                font-weight: 900;
-            }
-            Text {
-                text: root.instruction;
-                color: Palette.ink;
-                font-size: 13px;
-                font-weight: 700;
-            }
-        }
-    }
-}
-
-// A bottom tab-bar item with a yellow active indicator.
-component TabItem inherits Rectangle {
-    in property <string> label;
-    in property <bool> active;
-    callback pressed();
-    background: root.active ? Palette.ash : Palette.ink;
-    TouchArea {
-        clicked => { root.pressed(); }
-    }
-    VerticalLayout {
-        Rectangle {
-            height: 4px;
-            background: root.active ? Palette.yellow : transparent;
-        }
-        Text {
-            text: root.label;
-            color: root.active ? Palette.paper : Palette.mute;
-            font-size: 14px;
-            font-weight: 900;
             letter-spacing: 2px;
             horizontal-alignment: center;
             vertical-alignment: center;
@@ -118,18 +54,130 @@ component TabItem inherits Rectangle {
     }
 }
 
-// A tunable parameter row on the SETTINGS screen: label + default hint on
-// the left, the current value, then − / + steppers (or one toggle button).
+// Outlined console button; fills with its tint while pressed (or `filled`).
+component TermButton inherits Rectangle {
+    in property <string> label;
+    in property <color> tint: Palette.phos;
+    in property <bool> filled: false;
+    in property <length> label-size: 15px;
+    callback pressed();
+    border-width: 1px;
+    border-color: root.tint;
+    background: touch.pressed || root.filled ? root.tint : transparent;
+    touch := TouchArea { clicked => { root.pressed(); } }
+    Text {
+        text: root.label;
+        color: touch.pressed || root.filled ? Palette.ink : root.tint;
+        font-size: root.label-size;
+        font-weight: 900;
+        letter-spacing: 2px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// One telemetry cell: dim label over a big phosphor value.
+component MetricCell inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <string> unit;
+    in property <color> accent: Palette.phos;
+    VerticalLayout {
+        padding: 10px;
+        spacing: 2px;
+        Text {
+            text: root.label;
+            color: Palette.dim;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 2px;
+        }
+        HorizontalLayout {
+            alignment: start;
+            spacing: 4px;
+            Text {
+                text: root.value;
+                color: root.accent;
+                font-size: 30px;
+                font-weight: 900;
+            }
+            Text {
+                text: root.unit;
+                color: Palette.dim;
+                font-size: 11px;
+                font-weight: 700;
+                vertical-alignment: bottom;
+            }
+        }
+    }
+}
+
+// Console header: ship line + screen title + blinking cursor on the left,
+// two status lines (GPS / nav) on the right. Replaces the old amber strip.
+component ConsoleHeader inherits Rectangle {
+    in property <string> title;
+    in property <string> status;    // amber, status line left segment
+    in property <string> status2;   // dim, status line right segment
+    height: 78px;
+    background: Palette.ink;
+    VerticalLayout {
+        VerticalLayout {
+            padding-left: 14px;
+            padding-right: 64px; // clear of the sticky gear button
+            padding-top: 8px;
+            spacing: 3px;
+            Text {
+                text: "WEYLAND-YUTANI CORP // ROUTE SYSTEMS";
+                color: Palette.dim;
+                font-size: 9px;
+                font-weight: 700;
+                letter-spacing: 2px;
+            }
+            Text {
+                text: root.title;
+                color: Palette.phos;
+                font-size: 22px;
+                font-weight: 900;
+                letter-spacing: 3px;
+            }
+            HorizontalLayout {
+                alignment: start;
+                spacing: 10px;
+                Text {
+                    text: root.status;
+                    color: Palette.amber;
+                    font-size: 11px;
+                    font-weight: 900;
+                    letter-spacing: 1px;
+                }
+                Text {
+                    text: root.status2;
+                    color: Palette.dim;
+                    font-size: 11px;
+                    font-weight: 700;
+                    letter-spacing: 1px;
+                }
+            }
+        }
+        Rectangle { vertical-stretch: 1; background: Palette.ink; }
+        Rectangle { height: 1px; background: Palette.line; }
+    }
+}
+
+// A tunable parameter row on SETTINGS: label + default hint, amber value,
+// DEF (red once modified) and − / + steppers or an ON/OFF toggle.
 component SettingRow inherits Rectangle {
     in property <string> label;
     in property <string> value;
-    in property <string> default-value; // shown as "DEFAULT …" under the label
-    in property <bool> stepper: true;   // false = single ON/OFF toggle
+    in property <string> default-value;
+    in property <bool> stepper: true;
     callback minus();
     callback plus();  // also the toggle action when stepper == false
     callback reset(); // back to this parameter's default
     height: 64px;
-    background: Palette.ash;
+    background: Palette.panel;
+    border-width: 1px;
+    border-color: Palette.line;
     HorizontalLayout {
         padding-left: 12px;
         padding-right: 8px;
@@ -142,22 +190,22 @@ component SettingRow inherits Rectangle {
             spacing: 2px;
             Text {
                 text: root.label;
-                color: Palette.paper;
-                font-size: 13px;
+                color: Palette.phos;
+                font-size: 12px;
                 font-weight: 700;
                 letter-spacing: 1px;
             }
             Text {
                 text: "DEFAULT \{root.default-value}";
-                color: Palette.mute;
-                font-size: 10px;
+                color: Palette.dim;
+                font-size: 9px;
                 font-weight: 700;
                 letter-spacing: 1px;
             }
         }
         Text {
             text: root.value;
-            color: Palette.yellow;
+            color: Palette.amber;
             font-size: 22px;
             font-weight: 900;
             vertical-alignment: center;
@@ -166,77 +214,57 @@ component SettingRow inherits Rectangle {
         Rectangle {
             width: 44px;
             background: Palette.ink;
+            border-width: 1px;
+            border-color: root.value == root.default-value ? Palette.line
+                                                           : Palette.red;
             TouchArea { clicked => { root.reset(); } }
             Text {
                 text: "DEF";
-                color: root.value == root.default-value ? Palette.mute
+                color: root.value == root.default-value ? Palette.dim
                                                         : Palette.red;
-                font-size: 11px;
+                font-size: 10px;
                 font-weight: 900;
                 letter-spacing: 1px;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
         }
-        if root.stepper : Rectangle {
+        if root.stepper : TermButton {
             width: 44px;
-            background: Palette.ink;
-            TouchArea { clicked => { root.minus(); } }
-            Text {
-                text: "−";
-                color: Palette.paper;
-                font-size: 22px;
-                font-weight: 900;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
+            label: "−";
+            label-size: 20px;
+            pressed => { root.minus(); }
         }
-        if root.stepper : Rectangle {
+        if root.stepper : TermButton {
             width: 44px;
-            background: Palette.ink;
-            TouchArea { clicked => { root.plus(); } }
-            Text {
-                text: "+";
-                color: Palette.paper;
-                font-size: 22px;
-                font-weight: 900;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
+            label: "+";
+            label-size: 20px;
+            pressed => { root.plus(); }
         }
-        if !root.stepper : Rectangle {
+        if !root.stepper : TermButton {
             width: 92px;
-            background: root.value == "ON" ? Palette.blue : Palette.ink;
-            TouchArea { clicked => { root.plus(); } }
-            Text {
-                text: root.value == "ON" ? "TURN OFF" : "TURN ON";
-                color: Palette.paper;
-                font-size: 12px;
-                font-weight: 900;
-                letter-spacing: 1px;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
+            label: root.value == "ON" ? "DISABLE" : "ENABLE";
+            label-size: 11px;
+            tint: root.value == "ON" ? Palette.amber : Palette.phos;
+            filled: root.value == "ON";
+            pressed => { root.plus(); }
         }
     }
 }
 
-// A ride/pause/stop control button.
-component ControlButton inherits Rectangle {
+// Bottom command bar item: inverted phosphor block when active.
+component TabItem inherits Rectangle {
     in property <string> label;
-    in property <color> fill: Palette.blue;
-    in property <color> label-color: Palette.paper;
+    in property <bool> active;
     callback pressed();
-    background: touch.pressed ? Palette.ash : root.fill;
-    touch := TouchArea {
-        clicked => { root.pressed(); }
-    }
+    background: root.active ? Palette.phos : Palette.ink;
+    TouchArea { clicked => { root.pressed(); } }
     Text {
         text: root.label;
-        color: root.label-color;
-        font-size: 20px;
+        color: root.active ? Palette.ink : Palette.dim;
+        font-size: 13px;
         font-weight: 900;
-        letter-spacing: 2px;
+        letter-spacing: 3px;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -266,7 +294,7 @@ export component AppWindow inherits Window {
     // Saved rides, newest first (C++ owns the model).
     in property <[SessionRow]> sessions;
 
-    // 0 = live dashboard, 1 = map, 2 = history list.
+    // 0 = live dashboard, 1 = map, 2 = history, 3 = detail, 4 = settings.
     in-out property <int> screen: 0;
     in-out property <int> selected-session: -1;
     // Infographics for the selected session, generated by C++ as SVG
@@ -314,7 +342,7 @@ export component AppWindow inherits Window {
     in property <string> set-bearing-delta-value: "3";
     in property <string> set-mock-value: "OFF";
     // id: 0 follow zoom, 1 heading speed, 2 bearing step, 3 mock ride.
-    // dir: -1 / +1 (ignored for the mock toggle).
+    // dir: -1 / +1 (ignored for the mock toggle); 0 = reset to default.
     callback setting-adjust(int, int);
     callback settings-reset();
     // Where the gear was pressed, so × returns there.
@@ -337,8 +365,8 @@ export component AppWindow inherits Window {
     in-out property <length> map-pinch-ay: 0px;
 
     property <color> hr-color: root.hr-zone >= 4 ? Palette.red
-                             : root.hr-zone == 3 ? Palette.yellow
-                             : Palette.blue;
+                             : root.hr-zone == 3 ? Palette.amber
+                             : Palette.phos;
 
     // Safe-area insets: system status bar (top) and gesture/nav bar (bottom)
     // get their own dark strips so they stay visible over the black UI.
@@ -355,118 +383,148 @@ export component AppWindow inherits Window {
         // ================= DASHBOARD =================
         if root.screen == 0 : VerticalLayout {
             vertical-stretch: 1;
-            NavStrip {
-                instruction: root.nav-instruction;
-                distance: root.nav-distance;
+            ConsoleHeader {
+                title: "RIDE CONTROL";
+                status: root.nav-distance;
+                status2: root.nav-instruction;
             }
 
-            // ---- Speed hero ----
+            // ---- Velocity readout ----
             Rectangle {
                 vertical-stretch: 1;
                 background: Palette.ink;
+                clip: true;
+
+                // Wireframe tunnel while the ride runs: concentric squares
+                // fly outward (quadratic growth = perspective), rate scales
+                // with speed. Drawn before the readout, so it sits behind.
+                if root.ride-state == 1 : Rectangle {
+                    width: 100%;
+                    height: 100%;
+                    property <float> phase:
+                        Math.mod(animation-tick() / 1s * (0.3 + root.speed / 25.0), 1.0);
+                    for i in [0, 1, 2, 3, 4, 5] : Rectangle {
+                        property <float> p: Math.mod(parent.phase + i / 6.0, 1.0);
+                        width: parent.width * (0.06 + 1.1 * self.p * self.p);
+                        height: parent.height * (0.06 + 1.1 * self.p * self.p);
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        background: transparent;
+                        border-width: self.p > 0.7 ? 4px : self.p > 0.35 ? 3px : 2px;
+                        border-color: self.p > 0.5 ? Palette.phos : Palette.dim;
+                        opacity: 0.25 + 0.65 * self.p;
+                    }
+                }
+
                 VerticalLayout {
                     alignment: center;
-                    spacing: 0px;
+                    spacing: 4px;
                     Text {
-                        text: root.ride-state == 2 ? "PAUSED" : "SPEED  km/h";
-                        color: root.ride-state == 2 ? Palette.yellow : Palette.mute;
-                        font-size: 13px;
+                        text: root.ride-state == 2 ? "** SYSTEM HOLD **"
+                                                   : "GROUND VELOCITY — KM/H";
+                        color: root.ride-state == 2 ? Palette.amber : Palette.dim;
+                        font-size: 12px;
                         font-weight: 700;
-                        letter-spacing: 2px;
+                        letter-spacing: 3px;
                         horizontal-alignment: center;
                     }
                     Text {
                         text: Math.round(root.speed);
-                        color: root.ride-state == 2 ? Palette.mute : Palette.paper;
-                        font-size: 150px;
+                        color: root.ride-state == 2 ? Palette.dim : Palette.phos;
+                        font-size: 140px;
                         font-weight: 900;
                         horizontal-alignment: center;
                     }
-                    // Bauhaus accent bar under the number
+                    // Console rule under the readout.
                     HorizontalLayout {
                         alignment: center;
-                        Rectangle {
-                            height: 8px;
-                            width: 180px;
-                            background: Palette.red;
-                        }
+                        Rectangle { width: 200px; height: 2px; background: Palette.dim; }
                     }
                 }
             }
 
-            // ---- Core ride metrics row ----
-            HorizontalLayout {
-                spacing: 4px;
-                padding-left: 4px;
-                padding-right: 4px;
-                MetricTile {
-                    horizontal-stretch: 1;
-                    label: "DIST";
-                    value: root.distance;
-                    unit: "km";
-                    accent: Palette.yellow;
-                }
-                MetricTile {
-                    horizontal-stretch: 1;
-                    label: "TIME";
-                    value: root.ride-time;
-                    unit: "";
-                    accent: Palette.paper;
-                }
-                MetricTile {
-                    horizontal-stretch: 1;
-                    label: "AVG";
-                    value: Math.round(root.avg-speed);
-                    unit: "km/h";
-                    accent: Palette.paper;
+            // ---- Telemetry panel ----
+            TermPanel {
+                caption: "TELEMETRY";
+                height: 78px;
+                HorizontalLayout {
+                    MetricCell {
+                        horizontal-stretch: 1;
+                        label: "DIST";
+                        value: root.distance;
+                        unit: "KM";
+                        accent: Palette.amber;
+                    }
+                    Rectangle { width: 1px; background: Palette.line; }
+                    MetricCell {
+                        horizontal-stretch: 1;
+                        label: "TIME";
+                        value: root.ride-time;
+                        unit: "";
+                    }
+                    Rectangle { width: 1px; background: Palette.line; }
+                    MetricCell {
+                        horizontal-stretch: 1;
+                        label: "AVG";
+                        value: Math.round(root.avg-speed);
+                        unit: "KM/H";
+                    }
                 }
             }
 
-            // ---- Cadence + heart rate ----
-            HorizontalLayout {
-                spacing: 4px;
-                padding: 4px;
-                MetricTile {
-                    horizontal-stretch: 1;
-                    label: "CADENCE";
-                    // Negative = no such sensor on this source (real GPS).
-                    value: root.cadence < 0 ? "--" : root.cadence;
-                    unit: "rpm";
-                    accent: Palette.blue;
-                }
-                MetricTile {
-                    horizontal-stretch: 1;
-                    label: root.hr-zone > 0 ? "HEART  Z\{root.hr-zone}" : "HEART";
-                    value: root.heart-rate < 0 ? "--" : root.heart-rate;
-                    unit: "bpm";
-                    accent: root.hr-color;
+            Rectangle { height: 10px; background: Palette.ink; }
+
+            // ---- Bio / drive sensors ----
+            TermPanel {
+                caption: "BIO // DRIVE";
+                height: 78px;
+                HorizontalLayout {
+                    MetricCell {
+                        horizontal-stretch: 1;
+                        label: "CADENCE";
+                        // Negative = no such sensor on this source (real GPS).
+                        value: root.cadence < 0 ? "--" : root.cadence;
+                        unit: "RPM";
+                        accent: Palette.cyan;
+                    }
+                    Rectangle { width: 1px; background: Palette.line; }
+                    MetricCell {
+                        horizontal-stretch: 1;
+                        label: root.hr-zone > 0 ? "HEART  Z\{root.hr-zone}" : "HEART";
+                        value: root.heart-rate < 0 ? "--" : root.heart-rate;
+                        unit: "BPM";
+                        accent: root.hr-color;
+                    }
                 }
             }
+
+            Rectangle { height: 10px; background: Palette.ink; }
 
             // ---- Ride controls: START / PAUSE+STOP / RESUME+STOP ----
             HorizontalLayout {
-                height: 64px;
-                spacing: root.ride-state == 0 ? 0px : 4px;
-                if root.ride-state == 0 : ControlButton {
+                height: 58px;
+                padding-left: 10px;
+                padding-right: 10px;
+                spacing: 8px;
+                if root.ride-state == 0 : TermButton {
                     horizontal-stretch: 1;
-                    label: "START RIDE";
-                    fill: Palette.blue;
+                    label: "ENGAGE RIDE";
                     pressed => { root.toggle-ride(); }
                 }
-                if root.ride-state != 0 : ControlButton {
+                if root.ride-state != 0 : TermButton {
                     horizontal-stretch: 1;
-                    label: root.ride-state == 1 ? "PAUSE" : "RESUME";
-                    fill: root.ride-state == 1 ? Palette.yellow : Palette.blue;
-                    label-color: root.ride-state == 1 ? Palette.ink : Palette.paper;
+                    label: root.ride-state == 1 ? "HOLD" : "RESUME";
+                    tint: root.ride-state == 1 ? Palette.amber : Palette.phos;
                     pressed => { root.toggle-ride(); }
                 }
-                if root.ride-state != 0 : ControlButton {
+                if root.ride-state != 0 : TermButton {
                     horizontal-stretch: 1;
-                    label: "STOP";
-                    fill: Palette.red;
+                    label: "TERMINATE";
+                    tint: Palette.red;
                     pressed => { root.stop-ride(); }
                 }
             }
+            Rectangle { height: 8px; background: Palette.ink; }
         }
 
         // ================= MAP =================
@@ -486,8 +544,8 @@ export component AppWindow inherits Window {
             }
 
             // Gestures: one-finger pan, two-finger pinch zoom, double-tap
-            // zoom-in. The zoom buttons are declared later, so they stay on
-            // top and remain clickable. During the pinch only the visual
+            // zoom-in. The control buttons are declared later, so they stay
+            // on top and remain clickable. During the pinch only the visual
             // preview moves; mbgl renders once on commit.
             if root.map-available : gest := ScaleRotateGestureHandler {
                 property <float> last-scale: 1.0;
@@ -537,29 +595,19 @@ export component AppWindow inherits Window {
             // Placeholder until the platform has a map renderer.
             if !root.map-available : VerticalLayout {
                 alignment: center;
-                spacing: 12px;
-                Rectangle {
-                    height: 18px;
-                    HorizontalLayout {
-                        alignment: center;
-                        spacing: 8px;
-                        Rectangle { width: 18px; height: 18px; background: Palette.yellow; }
-                        Rectangle { width: 18px; height: 18px; background: Palette.red; }
-                        Rectangle { width: 18px; height: 18px; background: Palette.blue; }
-                    }
-                }
+                spacing: 10px;
                 Text {
-                    text: "MAP";
-                    color: Palette.paper;
-                    font-size: 28px;
+                    text: "MAP SUBSYSTEM";
+                    color: Palette.phos;
+                    font-size: 24px;
                     font-weight: 900;
                     letter-spacing: 4px;
                     horizontal-alignment: center;
                 }
                 Text {
-                    text: "RENDERER PORT IN PROGRESS";
-                    color: Palette.mute;
-                    font-size: 12px;
+                    text: "RENDERER OFFLINE — PORT IN PROGRESS";
+                    color: Palette.dim;
+                    font-size: 11px;
                     font-weight: 700;
                     letter-spacing: 2px;
                     horizontal-alignment: center;
@@ -569,6 +617,7 @@ export component AppWindow inherits Window {
             // Rider position marker. The frame is drawn with `image-fit:
             // cover`, so it is scaled by whichever axis has to fill: the
             // same factor is applied to the projected offset here.
+            // Styled as a motion-tracker contact: phosphor ring + dot.
             if root.map-available && root.marker-valid : Rectangle {
                 width: 38px;
                 height: 38px;
@@ -577,58 +626,59 @@ export component AppWindow inherits Window {
                 y: (parent.height - self.height) / 2 + root.marker-ny *
                    max(parent.width / root.frame-aspect, parent.height);
 
-                // Soft halo, so the marker survives a busy map.
+                // Soft halo, so the contact survives a busy map.
                 Rectangle {
                     width: 100%;
                     height: 100%;
                     border-radius: self.width / 2;
-                    background: #f4f1e947;
+                    background: #4dff7038;
                 }
-                // Bone-white disc: the contrast ring against the tiles.
                 Rectangle {
                     width: 26px;
                     height: 26px;
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
                     border-radius: self.width / 2;
-                    background: Palette.paper;
                     border-width: 2px;
-                    border-color: Palette.ink;
+                    border-color: Palette.phos;
+                    background: #03050366;
                 }
-                // Bauhaus square inside the circle — red while the ride is
-                // live, ink when it is idle or paused.
+                // Centre dot — alert red while the ride is recording.
                 Rectangle {
-                    width: 12px;
-                    height: 12px;
+                    width: 10px;
+                    height: 10px;
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
-                    background: root.ride-state == 1 ? Palette.red : Palette.ink;
+                    border-radius: 5px;
+                    background: root.ride-state == 1 ? Palette.red : Palette.phos;
                 }
             }
 
-            // Live ride chip while riding.
+            // Live ride readout while riding.
             if root.map-available && root.ride-state != 0 : Rectangle {
                 x: 8px;
                 y: 8px;
                 width: chip.preferred-width + 24px;
-                height: 44px;
+                height: 40px;
                 background: Palette.ink;
+                border-width: 1px;
+                border-color: Palette.line;
                 chip := HorizontalLayout {
                     padding-left: 12px;
                     padding-right: 12px;
-                    spacing: 8px;
+                    spacing: 10px;
                     alignment: start;
                     Text {
-                        text: "\{Math.round(root.speed)} km/h";
-                        color: Palette.yellow;
-                        font-size: 16px;
+                        text: "V \{Math.round(root.speed)} KM/H";
+                        color: Palette.amber;
+                        font-size: 14px;
                         font-weight: 900;
                         vertical-alignment: center;
                     }
                     Text {
-                        text: "\{root.distance} km";
-                        color: Palette.paper;
-                        font-size: 16px;
+                        text: "D \{root.distance} KM";
+                        color: Palette.phos;
+                        font-size: 14px;
                         font-weight: 700;
                         vertical-alignment: center;
                     }
@@ -642,15 +692,16 @@ export component AppWindow inherits Window {
                 width: 48px;
                 height: 208px;
                 spacing: 4px;
-                // COMPASS: toggle north-up ("N") vs heading-up ("^", yellow).
+                // COMPASS: toggle north-up ("N") vs heading-up ("^", amber).
                 // ASCII only: "▲" is tofu in the bundled font (see CLAUDE.md).
                 Rectangle {
                     background: Palette.ink;
+                    border-width: 1px;
+                    border-color: root.map-heading-up ? Palette.amber : Palette.line;
                     TouchArea { clicked => { root.map-heading-toggle(); } }
                     Text {
                         text: root.map-heading-up ? "^" : "N";
-                        color: root.map-heading-up ? Palette.yellow
-                                                   : Palette.paper;
+                        color: root.map-heading-up ? Palette.amber : Palette.phos;
                         font-size: 18px;
                         font-weight: 900;
                         horizontal-alignment: center;
@@ -658,12 +709,14 @@ export component AppWindow inherits Window {
                     }
                 }
                 // LOCATE: recentre on the rider and relock the camera. Turns
-                // yellow while the camera is following.
+                // amber while the camera is following.
                 Rectangle {
                     background: Palette.ink;
+                    border-width: 1px;
+                    border-color: root.map-following ? Palette.amber : Palette.line;
                     TouchArea { clicked => { root.map-locate(); } }
-                    property <color> tint: root.map-following ? Palette.yellow
-                                                              : Palette.paper;
+                    property <color> tint: root.map-following ? Palette.amber
+                                                              : Palette.phos;
                     // Crosshair: ring, centre dot, four ticks.
                     Rectangle {
                         width: 20px;
@@ -709,10 +762,12 @@ export component AppWindow inherits Window {
                 }
                 Rectangle {
                     background: Palette.ink;
+                    border-width: 1px;
+                    border-color: Palette.line;
                     TouchArea { clicked => { root.map-zoom(1); } }
                     Text {
                         text: "+";
-                        color: Palette.paper;
+                        color: Palette.phos;
                         font-size: 24px;
                         font-weight: 900;
                         horizontal-alignment: center;
@@ -721,10 +776,12 @@ export component AppWindow inherits Window {
                 }
                 Rectangle {
                     background: Palette.ink;
+                    border-width: 1px;
+                    border-color: Palette.line;
                     TouchArea { clicked => { root.map-zoom(-1); } }
                     Text {
                         text: "−";
-                        color: Palette.paper;
+                        color: Palette.phos;
                         font-size: 24px;
                         font-weight: 900;
                         horizontal-alignment: center;
@@ -741,11 +798,13 @@ export component AppWindow inherits Window {
                 width: 190px;
                 height: 84px;
                 background: Palette.ink;
+                border-width: 1px;
+                border-color: Palette.line;
                 Text {
                     x: 8px;
                     y: 6px;
                     text: root.live-elev-label;
-                    color: Palette.mute;
+                    color: Palette.dim;
                     font-size: 10px;
                     font-weight: 700;
                     letter-spacing: 1px;
@@ -756,7 +815,7 @@ export component AppWindow inherits Window {
                     width: parent.width - 16px;
                     height: parent.height - 30px;
                     commands: root.live-elev-path;
-                    stroke: Palette.red;
+                    stroke: Palette.amber;
                     stroke-width: 2px;
                     viewbox-x: 0;
                     viewbox-y: 0;
@@ -770,56 +829,30 @@ export component AppWindow inherits Window {
                 x: 8px;
                 y: parent.height - 20px;
                 text: "© MapLibre  © OpenStreetMap";
-                color: Palette.mute;
+                color: Palette.dim;
                 font-size: 10px;
             }
         }
 
-        // ================= HISTORY =================
+        // ================= LOG (history) =================
         if root.screen == 2 : VerticalLayout {
             vertical-stretch: 1;
 
-            // header
-            Rectangle {
-                height: 76px;
-                background: Palette.ink;
-                HorizontalLayout {
-                    padding: 16px;
-                    spacing: 12px;
-                    alignment: start;
-                    Rectangle {
-                        width: 18px;
-                        height: 18px;
-                        y: (parent.height - self.height) / 2;
-                        background: Palette.red;
-                    }
-                    Text {
-                        text: "RIDES";
-                        color: Palette.paper;
-                        font-size: 28px;
-                        font-weight: 900;
-                        letter-spacing: 2px;
-                        vertical-alignment: center;
-                    }
-                    Text {
-                        text: root.sessions.length;
-                        color: Palette.mute;
-                        font-size: 16px;
-                        font-weight: 700;
-                        vertical-alignment: center;
-                    }
-                }
+            ConsoleHeader {
+                title: "SORTIE LOG";
+                status: "\{root.sessions.length} STORED";
+                status2: "FLIGHT RECORDER";
             }
 
             if root.sessions.length == 0 : Rectangle {
                 vertical-stretch: 1;
                 background: Palette.ink;
                 Text {
-                    text: "NO RIDES YET";
-                    color: Palette.mute;
-                    font-size: 16px;
+                    text: "NO SORTIES ON RECORD";
+                    color: Palette.dim;
+                    font-size: 14px;
                     font-weight: 700;
-                    letter-spacing: 2px;
+                    letter-spacing: 3px;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -828,65 +861,64 @@ export component AppWindow inherits Window {
             if root.sessions.length > 0 : ListView {
                 vertical-stretch: 1;
                 for s[i] in root.sessions : Rectangle {
-                    height: 86px;
+                    height: 80px;
                     background: Palette.ink;
                     Rectangle {
-                        x: 4px;
-                        y: 2px;
-                        width: parent.width - 8px;
-                        height: parent.height - 4px;
-                        background: Palette.ash;
+                        x: 8px;
+                        y: 3px;
+                        width: parent.width - 16px;
+                        height: parent.height - 6px;
+                        background: Palette.panel;
+                        border-width: 1px;
+                        border-color: Palette.line;
                         TouchArea {
                             clicked => { root.select-session(i); }
                         }
-                        VerticalLayout {
+                        HorizontalLayout {
                             padding: 12px;
-                            spacing: 6px;
-                            HorizontalLayout {
-                                spacing: 12px;
-                                // Bauhaus marker: primary colors cycling by row
-                                Rectangle {
-                                    width: 12px;
-                                    height: 12px;
-                                    y: 6px;
-                                    background: Math.mod(i, 3) == 0 ? Palette.yellow
-                                              : Math.mod(i, 3) == 1 ? Palette.red
-                                              : Palette.blue;
+                            spacing: 12px;
+                            // Record index, terminal style.
+                            Text {
+                                text: i < 9 ? "0\{i + 1}" : "\{i + 1}";
+                                color: Palette.dim;
+                                font-size: 14px;
+                                font-weight: 900;
+                                vertical-alignment: center;
+                            }
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                alignment: center;
+                                spacing: 2px;
+                                Text {
+                                    text: s.date;
+                                    color: Palette.dim;
+                                    font-size: 10px;
+                                    font-weight: 700;
+                                    letter-spacing: 1px;
                                 }
-                                VerticalLayout {
-                                    horizontal-stretch: 1;
-                                    spacing: 2px;
-                                    Text {
-                                        text: s.date;
-                                        color: Palette.mute;
-                                        font-size: 11px;
-                                        font-weight: 700;
-                                        letter-spacing: 1px;
-                                    }
-                                    Text {
-                                        text: "\{s.dist} km";
-                                        color: Palette.paper;
-                                        font-size: 24px;
-                                        font-weight: 900;
-                                    }
+                                Text {
+                                    text: "\{s.dist} KM";
+                                    color: Palette.phos;
+                                    font-size: 22px;
+                                    font-weight: 900;
                                 }
-                                VerticalLayout {
-                                    alignment: center;
-                                    spacing: 2px;
-                                    Text {
-                                        text: s.time;
-                                        color: Palette.paper;
-                                        font-size: 16px;
-                                        font-weight: 900;
-                                        horizontal-alignment: right;
-                                    }
-                                    Text {
-                                        text: "AVG \{s.avg} km/h";
-                                        color: Palette.mute;
-                                        font-size: 12px;
-                                        font-weight: 700;
-                                        horizontal-alignment: right;
-                                    }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 2px;
+                                Text {
+                                    text: s.time;
+                                    color: Palette.amber;
+                                    font-size: 15px;
+                                    font-weight: 900;
+                                    horizontal-alignment: right;
+                                }
+                                Text {
+                                    text: "AVG \{s.avg} KM/H";
+                                    color: Palette.dim;
+                                    font-size: 11px;
+                                    font-weight: 700;
+                                    horizontal-alignment: right;
                                 }
                             }
                         }
@@ -895,72 +927,69 @@ export component AppWindow inherits Window {
             }
         }
 
-        // ================= RIDE DETAIL (screen 3) =================
+        // ================= SORTIE DETAIL (screen 3) =================
         if root.screen == 3 : detail := VerticalLayout {
             vertical-stretch: 1;
             property <SessionRow> cur: root.sessions[root.selected-session];
 
             // header: back + date + headline stats
             Rectangle {
-                height: 76px;
+                height: 70px;
                 background: Palette.ink;
-                HorizontalLayout {
-                    padding: 12px;
-                    spacing: 12px;
-                    Rectangle {
-                        width: 52px;
-                        background: Palette.ash;
-                        TouchArea { clicked => { root.detail-back(); } }
-                        Text {
-                            text: "×";
-                            color: Palette.paper;
-                            font-size: 24px;
-                            font-weight: 900;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
+                VerticalLayout {
+                    HorizontalLayout {
+                        padding: 10px;
+                        spacing: 12px;
+                        TermButton {
+                            width: 52px;
+                            label: "×";
+                            label-size: 20px;
+                            tint: Palette.dim;
+                            pressed => { root.detail-back(); }
+                        }
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            alignment: center;
+                            spacing: 2px;
+                            Text {
+                                text: "SORTIE // \{detail.cur.date}";
+                                color: Palette.dim;
+                                font-size: 10px;
+                                font-weight: 700;
+                                letter-spacing: 1px;
+                            }
+                            Text {
+                                text: "\{detail.cur.dist} KM";
+                                color: Palette.phos;
+                                font-size: 24px;
+                                font-weight: 900;
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 2px;
+                            Text {
+                                text: detail.cur.time;
+                                color: Palette.amber;
+                                font-size: 15px;
+                                font-weight: 900;
+                                horizontal-alignment: right;
+                            }
+                            Text {
+                                text: "AVG \{detail.cur.avg} KM/H";
+                                color: Palette.dim;
+                                font-size: 11px;
+                                font-weight: 700;
+                                horizontal-alignment: right;
+                            }
                         }
                     }
-                    VerticalLayout {
-                        horizontal-stretch: 1;
-                        alignment: center;
-                        spacing: 2px;
-                        Text {
-                            text: detail.cur.date;
-                            color: Palette.mute;
-                            font-size: 11px;
-                            font-weight: 700;
-                            letter-spacing: 1px;
-                        }
-                        Text {
-                            text: "\{detail.cur.dist} km";
-                            color: Palette.paper;
-                            font-size: 26px;
-                            font-weight: 900;
-                        }
-                    }
-                    VerticalLayout {
-                        alignment: center;
-                        spacing: 2px;
-                        Text {
-                            text: detail.cur.time;
-                            color: Palette.paper;
-                            font-size: 16px;
-                            font-weight: 900;
-                            horizontal-alignment: right;
-                        }
-                        Text {
-                            text: "AVG \{detail.cur.avg} km/h";
-                            color: Palette.mute;
-                            font-size: 12px;
-                            font-weight: 700;
-                            horizontal-alignment: right;
-                        }
-                    }
+                    Rectangle { height: 1px; background: Palette.line; }
                 }
             }
             // sensor stats strip
             Rectangle {
-                height: 36px;
+                height: 32px;
                 background: Palette.ink;
                 HorizontalLayout {
                     padding-left: 16px;
@@ -968,23 +997,23 @@ export component AppWindow inherits Window {
                     spacing: 20px;
                     alignment: start;
                     Text {
-                        text: "MAX \{detail.cur.max} km/h";
-                        color: Palette.yellow;
-                        font-size: 12px;
+                        text: "MAX \{detail.cur.max} KM/H";
+                        color: Palette.amber;
+                        font-size: 11px;
                         font-weight: 700;
                         vertical-alignment: center;
                     }
                     Text {
-                        text: "CAD \{detail.cur.cadence} rpm";
-                        color: Palette.blue;
-                        font-size: 12px;
+                        text: "CAD \{detail.cur.cadence} RPM";
+                        color: Palette.cyan;
+                        font-size: 11px;
                         font-weight: 700;
                         vertical-alignment: center;
                     }
                     Text {
-                        text: "HR \{detail.cur.hr} bpm";
+                        text: "HR \{detail.cur.hr} BPM";
                         color: Palette.red;
-                        font-size: 12px;
+                        font-size: 11px;
                         font-weight: 700;
                         vertical-alignment: center;
                     }
@@ -992,15 +1021,22 @@ export component AppWindow inherits Window {
             }
             // detail tabs
             HorizontalLayout {
-                height: 44px;
-                TabItem {
-                    label: "TRACK";
-                    active: root.detail-tab == 0;
+                height: 40px;
+                padding-left: 10px;
+                padding-right: 10px;
+                spacing: 8px;
+                TermButton {
+                    horizontal-stretch: 1;
+                    label: "TRACK DATA";
+                    label-size: 12px;
+                    filled: root.detail-tab == 0;
                     pressed => { root.detail-tab = 0; }
                 }
-                TabItem {
-                    label: "MAP";
-                    active: root.detail-tab == 1;
+                TermButton {
+                    horizontal-stretch: 1;
+                    label: "CHART VIEW";
+                    label-size: 12px;
+                    filled: root.detail-tab == 1;
                     pressed => {
                         root.detail-tab = 1;
                         root.detail-map-shown();
@@ -1012,26 +1048,17 @@ export component AppWindow inherits Window {
             if root.detail-tab == 0 : VerticalLayout {
                 vertical-stretch: 1;
                 padding: 12px;
-                spacing: 12px;
-                Rectangle {
-                    height: 140px;
-                    background: Palette.ash;
-                    Text {
-                        x: 10px;
-                        y: 8px;
-                        text: "SPEED";
-                        color: Palette.mute;
-                        font-size: 10px;
-                        font-weight: 700;
-                        letter-spacing: 1px;
-                    }
+                spacing: 14px;
+                TermPanel {
+                    caption: "SPEED";
+                    height: 132px;
                     if root.sel-speed-path != "" : Path {
                         x: 10px;
                         y: 12px;
                         width: parent.width - 20px;
                         height: parent.height - 24px;
                         commands: root.sel-speed-path;
-                        stroke: Palette.yellow;
+                        stroke: Palette.amber;
                         stroke-width: 2px;
                         viewbox-x: 0;
                         viewbox-y: 0;
@@ -1040,25 +1067,16 @@ export component AppWindow inherits Window {
                     }
                     if root.sel-speed-path == "" : Text {
                         text: "NO DATA";
-                        color: Palette.mute;
+                        color: Palette.dim;
                         font-size: 11px;
                         font-weight: 700;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
                 }
-                Rectangle {
-                    height: 140px;
-                    background: Palette.ash;
-                    Text {
-                        x: 10px;
-                        y: 8px;
-                        text: root.sel-elev-label;
-                        color: Palette.mute;
-                        font-size: 10px;
-                        font-weight: 700;
-                        letter-spacing: 1px;
-                    }
+                TermPanel {
+                    caption: root.sel-elev-label;
+                    height: 132px;
                     if root.sel-elev-path != "" : Path {
                         x: 10px;
                         y: 12px;
@@ -1074,32 +1092,23 @@ export component AppWindow inherits Window {
                     }
                     if root.sel-elev-path == "" : Text {
                         text: "NO DATA";
-                        color: Palette.mute;
+                        color: Palette.dim;
                         font-size: 11px;
                         font-weight: 700;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
                 }
-                Rectangle {
+                TermPanel {
+                    caption: "TRACK";
                     vertical-stretch: 1;
-                    background: Palette.ash;
-                    Text {
-                        x: 10px;
-                        y: 8px;
-                        text: "TRACK";
-                        color: Palette.mute;
-                        font-size: 10px;
-                        font-weight: 700;
-                        letter-spacing: 1px;
-                    }
                     if root.sel-track-path != "" : Path {
                         x: 10px;
                         y: 8px;
                         width: parent.width - 20px;
                         height: parent.height - 16px;
                         commands: root.sel-track-path;
-                        stroke: Palette.blue;
+                        stroke: Palette.phos;
                         stroke-width: 2px;
                         viewbox-x: 0;
                         viewbox-y: 0;
@@ -1108,7 +1117,7 @@ export component AppWindow inherits Window {
                     }
                     if root.sel-track-path == "" : Text {
                         text: "NO TRACK";
-                        color: Palette.mute;
+                        color: Palette.dim;
                         font-size: 11px;
                         font-weight: 700;
                         horizontal-alignment: center;
@@ -1137,20 +1146,22 @@ export component AppWindow inherits Window {
                     y: (parent.height - self.height) / 2 + root.marker-ny *
                        max(parent.width / root.frame-aspect, parent.height);
                     border-radius: self.width / 2;
-                    background: Palette.paper;
+                    border-width: 2px;
+                    border-color: Palette.phos;
+                    background: #03050366;
                     Rectangle {
-                        width: 14px;
-                        height: 14px;
+                        width: 10px;
+                        height: 10px;
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
-                        border-radius: self.width / 2;
+                        border-radius: 5px;
                         background: Palette.red;
                     }
                 }
                 if !root.map-available : Text {
                     text: "REPLAY — ANDROID ONLY";
-                    color: Palette.mute;
-                    font-size: 13px;
+                    color: Palette.dim;
+                    font-size: 12px;
                     font-weight: 700;
                     letter-spacing: 2px;
                     horizontal-alignment: center;
@@ -1165,43 +1176,31 @@ export component AppWindow inherits Window {
                     HorizontalLayout {
                         padding: 8px;
                         spacing: 8px;
-                        Rectangle {
+                        TermButton {
                             width: 110px;
-                            background: root.replay-playing ? Palette.red
-                                                            : Palette.blue;
-                            TouchArea { clicked => { root.replay-toggle(); } }
-                            Text {
-                                text: root.replay-playing ? "PAUSE" : "PLAY";
-                                color: Palette.paper;
-                                font-size: 14px;
-                                font-weight: 900;
-                                letter-spacing: 1px;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
+                            label: root.replay-playing ? "FREEZE" : "REPLAY";
+                            label-size: 13px;
+                            tint: root.replay-playing ? Palette.red : Palette.phos;
+                            pressed => { root.replay-toggle(); }
                         }
-                        Rectangle {
+                        TermButton {
                             width: 70px;
-                            background: Palette.ash;
-                            TouchArea { clicked => { root.replay-speed-cycle(); } }
-                            Text {
-                                text: root.replay-speed-label;
-                                color: Palette.paper;
-                                font-size: 14px;
-                                font-weight: 900;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
+                            label: root.replay-speed-label;
+                            label-size: 13px;
+                            tint: Palette.amber;
+                            pressed => { root.replay-speed-cycle(); }
                         }
                         Rectangle {
                             horizontal-stretch: 1;
-                            background: Palette.ash;
+                            background: Palette.panel;
+                            border-width: 1px;
+                            border-color: Palette.line;
                             Rectangle {
                                 x: 0;
                                 y: 0;
                                 height: 100%;
                                 width: parent.width * root.replay-progress;
-                                background: Palette.yellow;
+                                background: Palette.phos;
                             }
                         }
                     }
@@ -1209,51 +1208,51 @@ export component AppWindow inherits Window {
             }
         }
 
-        // ================= SETTINGS (screen 4) =================
+        // ================= SYSTEM PARAMETERS (screen 4) =================
         if root.screen == 4 : VerticalLayout {
             vertical-stretch: 1;
 
-            // header: close + title + bauhaus marker
             Rectangle {
-                height: 76px;
+                height: 70px;
                 background: Palette.ink;
-                HorizontalLayout {
-                    padding: 12px;
-                    spacing: 12px;
-                    Rectangle {
-                        width: 52px;
-                        background: Palette.ash;
-                        TouchArea { clicked => { root.screen = root.prev-screen; } }
-                        Text {
-                            text: "×";
-                            color: Palette.paper;
-                            font-size: 24px;
-                            font-weight: 900;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
+                VerticalLayout {
+                    HorizontalLayout {
+                        padding: 10px;
+                        spacing: 12px;
+                        TermButton {
+                            width: 52px;
+                            label: "×";
+                            label-size: 20px;
+                            tint: Palette.dim;
+                            pressed => { root.screen = root.prev-screen; }
+                        }
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            alignment: center;
+                            spacing: 2px;
+                            Text {
+                                text: "MU-TH-UR // OVERRIDES";
+                                color: Palette.dim;
+                                font-size: 9px;
+                                font-weight: 700;
+                                letter-spacing: 2px;
+                            }
+                            Text {
+                                text: "SYSTEM PARAMETERS";
+                                color: Palette.phos;
+                                font-size: 20px;
+                                font-weight: 900;
+                                letter-spacing: 2px;
+                            }
                         }
                     }
-                    Text {
-                        horizontal-stretch: 1;
-                        text: "SETTINGS";
-                        color: Palette.paper;
-                        font-size: 26px;
-                        font-weight: 900;
-                        letter-spacing: 2px;
-                        vertical-alignment: center;
-                    }
-                    Rectangle {
-                        width: 18px;
-                        height: 18px;
-                        y: (parent.height - self.height) / 2;
-                        background: Palette.yellow;
-                    }
+                    Rectangle { height: 1px; background: Palette.line; }
                 }
             }
 
             VerticalLayout {
                 padding: 12px;
-                spacing: 8px;
+                spacing: 10px;
                 SettingRow {
                     label: "FOLLOW ZOOM";
                     value: root.set-zoom-value;
@@ -1263,7 +1262,7 @@ export component AppWindow inherits Window {
                     reset => { root.setting-adjust(0, 0); }
                 }
                 SettingRow {
-                    label: "HEADING SPEED  km/h";
+                    label: "HEADING SPEED  KM/H";
                     value: root.set-heading-speed-value;
                     default-value: "7";
                     minus => { root.setting-adjust(1, -1); }
@@ -1271,7 +1270,7 @@ export component AppWindow inherits Window {
                     reset => { root.setting-adjust(1, 0); }
                 }
                 SettingRow {
-                    label: "BEARING STEP  deg";
+                    label: "BEARING STEP  DEG";
                     value: root.set-bearing-delta-value;
                     default-value: "3";
                     minus => { root.setting-adjust(2, -1); }
@@ -1279,7 +1278,7 @@ export component AppWindow inherits Window {
                     reset => { root.setting-adjust(2, 0); }
                 }
                 SettingRow {
-                    label: "MOCK RIDE  (restart)";
+                    label: "MOCK RIDE  (RESTART)";
                     value: root.set-mock-value;
                     default-value: "OFF";
                     stepper: false;
@@ -1287,10 +1286,11 @@ export component AppWindow inherits Window {
                     reset => { root.setting-adjust(3, 0); }
                 }
                 HorizontalLayout {
-                    height: 52px;
-                    ControlButton {
-                        label: "RESET DEFAULTS";
-                        fill: Palette.red;
+                    height: 48px;
+                    TermButton {
+                        label: "RESTORE FACTORY DEFAULTS";
+                        label-size: 13px;
+                        tint: Palette.red;
                         pressed => { root.settings-reset(); }
                     }
                 }
@@ -1299,22 +1299,25 @@ export component AppWindow inherits Window {
             Rectangle { vertical-stretch: 1; background: Palette.ink; }
         }
 
-        // ---- Tab bar: RIDE | MAP | HISTORY ----
+        // ---- Command bar: RIDE | MAP | LOG ----
+        Rectangle { height: 1px; background: Palette.line; }
         HorizontalLayout {
-            height: 52px;
+            height: 48px;
             TabItem {
                 label: "RIDE";
                 active: root.screen == 0;
                 pressed => { root.screen = 0; }
             }
+            Rectangle { width: 1px; background: Palette.line; }
             TabItem {
                 label: "MAP";
                 active: root.screen == 1;
                 pressed => { root.screen = 1; }
             }
+            Rectangle { width: 1px; background: Palette.line; }
             TabItem {
-                label: "HISTORY";
-                // 3 = a ride's detail page; 4 (settings) lights no tab
+                label: "LOG";
+                // 3 = a sortie's detail page; 4 (settings) lights no tab
                 active: root.screen == 2 || root.screen == 3;
                 pressed => { root.screen = 2; }
             }
@@ -1329,28 +1332,28 @@ export component AppWindow inherits Window {
     }
 
     // Sticky settings button, top-right on the three main screens (the
-    // detail page keeps its own header, settings shows ×). Bauhaus mixer
-    // glyph: three bars with offset primary-color knobs — no unicode gear,
-    // it would render as tofu in the bundled font.
+    // detail page keeps its own header, settings shows ×). Console mixer
+    // glyph: three bars with offset knobs — no unicode gear, it would
+    // render as tofu in the bundled font.
     if root.screen <= 2 : Rectangle {
         x: parent.width - 56px;
-        y: root.top-inset + 8px;
+        y: root.top-inset + 9px;
         width: 48px;
         height: 48px;
         background: Palette.ink;
-        border-width: 2px;
-        border-color: Palette.ash;
+        border-width: 1px;
+        border-color: Palette.line;
         TouchArea {
             clicked => {
                 root.prev-screen = root.screen;
                 root.screen = 4;
             }
         }
-        Rectangle { x: 14px; y: 15px; width: 20px; height: 2px; background: Palette.paper; }
-        Rectangle { x: 14px; y: 23px; width: 20px; height: 2px; background: Palette.paper; }
-        Rectangle { x: 14px; y: 31px; width: 20px; height: 2px; background: Palette.paper; }
-        Rectangle { x: 16px; y: 13px; width: 6px; height: 6px; background: Palette.yellow; }
-        Rectangle { x: 26px; y: 21px; width: 6px; height: 6px; background: Palette.red; }
-        Rectangle { x: 20px; y: 29px; width: 6px; height: 6px; background: Palette.blue; }
+        Rectangle { x: 14px; y: 15px; width: 20px; height: 2px; background: Palette.dim; }
+        Rectangle { x: 14px; y: 23px; width: 20px; height: 2px; background: Palette.dim; }
+        Rectangle { x: 14px; y: 31px; width: 20px; height: 2px; background: Palette.dim; }
+        Rectangle { x: 16px; y: 13px; width: 6px; height: 6px; background: Palette.phos; }
+        Rectangle { x: 26px; y: 21px; width: 6px; height: 6px; background: Palette.amber; }
+        Rectangle { x: 20px; y: 29px; width: 6px; height: 6px; background: Palette.red; }
     }
 }
