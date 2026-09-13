@@ -299,12 +299,12 @@ function gridTexture() {
     }
     x.stroke();
   };
-  line(1, 'rgba(104,120,146,0.42)', 1);  // minor
-  line(8, 'rgba(74,90,118,0.70)', 2);    // major
+  line(1, 'rgba(120,134,158,0.18)', 1);  // minor
+  line(8, 'rgba(92,108,134,0.34)', 2);   // major
   const fade = x.createRadialGradient(s / 2, s / 2, s * 0.08, s / 2, s / 2, s / 2);
-  fade.addColorStop(0.00, 'rgba(0,0,0,1)');
-  fade.addColorStop(0.55, 'rgba(0,0,0,0.8)');
-  fade.addColorStop(0.85, 'rgba(0,0,0,0.18)');
+  fade.addColorStop(0.00, 'rgba(0,0,0,0.85)');
+  fade.addColorStop(0.50, 'rgba(0,0,0,0.55)');
+  fade.addColorStop(0.82, 'rgba(0,0,0,0.12)');
   fade.addColorStop(1.00, 'rgba(0,0,0,0)');
   x.globalCompositeOperation = 'destination-in';
   x.fillStyle = fade; x.fillRect(0, 0, s, s);
