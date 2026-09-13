@@ -77,6 +77,16 @@
     .stat:nth-child(4) { border-left: 0; }
   }
 
+  /* ---- View-mode segmented control ---- */
+  #viewmodes { position: fixed; top: 74px; left: 24px; z-index: 3; display: flex;
+    background: var(--card); border: 1px solid var(--border); border-radius: 999px;
+    box-shadow: var(--shadow); padding: 3px; gap: 2px; }
+  #viewmodes button { font: inherit; font-size: 12px; font-weight: 600;
+    color: var(--muted); background: transparent; border: 0; border-radius: 999px;
+    padding: 6px 13px; cursor: pointer; transition: all .14s; white-space: nowrap; }
+  #viewmodes button:hover { color: var(--ink); }
+  #viewmodes button.on { background: var(--accent); color: #fff; }
+
   /* ---- Legend ---- */
   #legend { position: fixed; left: 24px; bottom: 104px; background: var(--card);
     border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow);
@@ -171,6 +181,13 @@
   <div class="cap">Speed</div>
   <div class="bar"></div>
   <div class="row"><span id="lg-min">0</span><span>km/h</span><span id="lg-max">0</span></div>
+</div>
+
+<div id="viewmodes" style="display:none">
+  <button data-mode="map" class="on">Map</button>
+  <button data-mode="grid">Grid</button>
+  <button data-mode="template">Elevation</button>
+  <button data-mode="progress">Progress</button>
 </div>
 
 <div id="hint" style="display:none">Drag to orbit &nbsp;·&nbsp; scroll to zoom</div>
@@ -357,11 +374,12 @@ function disposeObj(o) {
 function clearRide() {
   if (!ride) return;
   for (const o of [ride.route, ride.curtain, ride.head, ride.startDot,
-                   ride.endDot, ride.terrain, ride.skirt, ride.cap,
+                   ride.endDot, ride.terrain, ride.wire, ride.skirt, ride.cap,
                    ride.shadow, ride.base, ride.detail, ride.slab])
     disposeObj(o);
   grid.visible = true;
   document.getElementById('attrib').style.display = 'none';
+  viewMode = 'map'; // each new ride opens in Map view
   ride = null;
 }
 
@@ -497,13 +515,18 @@ const ROUTE_LIFT = 2; // metres above the slab top, so the line never z-fights
 
 function rebuildGeometry() {
   const g = ride; if (!g) return;
-  // With a DEM the route is draped on the relief (GPS altitude noise would
-  // float it above / sink it below the surface); flat slab keeps GPS profile.
+  // Track views (template/progress) lift the route by its OWN altitude profile
+  // so the curtain reads as an elevation ribbon over the grid. Map/grid views
+  // drape it on the terrain relief instead (GPS noise would float/sink it).
+  const trackMode = viewMode === 'template' || viewMode === 'progress';
+  const trackScale = 6; // altitude exaggeration for the ribbon
   const pts = g.P.map(p => {
-    const y = g.demSample ? g.demSample(p.x, p.z) * exagT() : p.y * exag;
+    const y = trackMode ? p.y * exag * trackScale / 6 + 8
+            : g.demSample ? g.demSample(p.x, p.z) * exagT() : p.y * exag;
     return new THREE.Vector3(p.x, y + ROUTE_LIFT, p.z);
   });
   g.drawn = pts;
+  g.trackMode = trackMode;
 
   // Route line, per-vertex speed colour.
   const pos = new Float32Array(pts.length * 3);
@@ -531,7 +554,10 @@ function rebuildGeometry() {
   const cCol = new Float32Array(n * 2 * 3);
   for (let i = 0; i < n; i++) {
     const p = pts[i];
-    const by = g.demSample ? g.demSample(p.x, p.z) * exagT() : 0;
+    // Track views drop the curtain to a flat baseline (full elevation ribbon);
+    // map/grid drop it to the terrain surface just under the line.
+    const by = g.trackMode ? 0
+             : g.demSample ? g.demSample(p.x, p.z) * exagT() : 0;
     cPos.set([p.x, p.y, p.z, p.x, by, p.z], i * 6);
     speedColor(g.vNorm[i], tmp);
     cCol.set([tmp.r, tmp.g, tmp.b, tmp.r, tmp.g, tmp.b], i * 6);
@@ -547,7 +573,7 @@ function rebuildGeometry() {
   cg.setIndex(idx);
   disposeObj(g.curtain);
   const curtain = new THREE.Mesh(cg, new THREE.MeshBasicMaterial({
-    vertexColors: true, transparent: true, opacity: 0.14,
+    vertexColors: true, transparent: true, opacity: g.trackMode ? 0.26 : 0.14,
     side: THREE.DoubleSide, depthWrite: false }));
   scene.add(curtain); g.curtain = curtain;
 
@@ -804,8 +830,8 @@ function refreshTerrain(g) {
     if (!m) return;
     g.slab.remove(m); m.geometry?.dispose?.(); m.material?.dispose?.();
   };
-  kill(g.terrain); kill(g.skirt); kill(g.cap); kill(g.shadow); kill(g.base);
-  g.terrain = g.skirt = g.cap = g.shadow = g.base = null;
+  kill(g.terrain); kill(g.wire); kill(g.skirt); kill(g.cap); kill(g.shadow); kill(g.base);
+  g.terrain = g.wire = g.skirt = g.cap = g.shadow = g.base = null;
   killDetail(g); // its heightfield tracks this terrain; scheduleDetail rebuilds
 
   const { xW, xE, zN, zS, w, d, thick } = g.slabX;
@@ -845,6 +871,13 @@ function refreshTerrain(g) {
     map: g.mapTex, vertexColors: !!g.demSample }));
   g.terrain.position.set(cx, 0.15, cz);
   g.slab.add(g.terrain);
+
+  // Wireframe relief for the "grid" view mode (a technical elevation mesh with
+  // no map texture). Shares the heightfield via a cloned geometry.
+  g.wire = new THREE.Mesh(geo.clone(), new THREE.MeshBasicMaterial({
+    color: 0x7f97b8, wireframe: true, transparent: true, opacity: 0.55 }));
+  g.wire.position.copy(g.terrain.position);
+  g.slab.add(g.wire);
 
   // ---- side wall: rim -> base, in one piece ----
   const idx = (ix, iz) => iz * N + ix;
@@ -892,6 +925,7 @@ function refreshTerrain(g) {
     map: gridTex(), transparent: true, depthWrite: false, fog: false }));
   g.base.renderOrder = -0.8;
   g.base.position.set(cx, baseY, cz);
+  g.baseY = baseY; g.baseCx = cx; g.baseCz = cz; // track view lifts it to y=0
   g.slab.add(g.base);
 
   // Cast a little off-axis from the key light, and sit just above the grid
@@ -904,6 +938,42 @@ function refreshTerrain(g) {
   g.shadow.position.set(cx + w * 0.05, baseY + Math.max(0.5, thick * 0.01),
                         cz + d * 0.04);
   g.slab.add(g.shadow);
+
+  applyViewMode(); // honour the current view mode on every rebuild
+}
+
+// ---- View modes ----------------------------------------------------------
+// map      : the map-draped specimen (default).
+// grid     : wireframe elevation mesh, no map texture — a technical read.
+// template : the bare track laid out complete, no terrain (a route blueprint).
+// progress : same bare track, played back progressively from the start.
+let viewMode = 'map';
+function applyViewMode(m) {
+  if (m) viewMode = m;
+  const g = ride; if (!g) return;
+  const vis = (o, on) => { if (o) o.visible = on; };
+  const isMap = viewMode === 'map', isGrid = viewMode === 'grid';
+  const isTrack = viewMode === 'template' || viewMode === 'progress';
+
+  vis(g.terrain, isMap);
+  vis(g.detail, isMap);
+  vis(g.wire, isGrid);
+  vis(g.skirt, isMap || isGrid);     // earth walls only with a solid/grid top
+  vis(g.cap, isMap || isGrid);
+  vis(g.shadow, isMap || isGrid);
+  vis(g.base, true);                 // grid stage under every mode
+  vis(g.curtain, isTrack || isGrid); // elevation ribbon in grid + track views
+  // Elevation/Progress: lift the grid to the ribbon's baseline (y=0); the
+  // specimen block is hidden, so its deeper floor would just float away.
+  if (g.base && g.baseY != null)
+    g.base.position.y = isTrack ? 0 : g.baseY;
+
+  document.querySelectorAll('#viewmodes button').forEach(b =>
+    b.classList.toggle('on', b.dataset.mode === viewMode));
+
+  if (viewMode === 'template') { playing = false; setPlayIcon(); setProgress(1); }
+  if (viewMode === 'progress') { headT = 0; playing = true; setPlayIcon(); setProgress(0); }
+  if (isMap) scheduleDetail();
 }
 
 async function buildSlab(g) {
@@ -1175,6 +1245,7 @@ function showChrome(sum, vMin, vMax) {
   document.getElementById('legend').style.display = 'block';
   document.getElementById('transport').style.display = 'flex';
   document.getElementById('hint').style.display = 'block';
+  document.getElementById('viewmodes').style.display = 'flex';
   const d = sum.ended_at ? new Date(sum.ended_at * 1000) : null;
   document.getElementById('date').textContent = d
     ? d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '';
@@ -1234,6 +1305,14 @@ document.getElementById('scrub').addEventListener('input', e => {
   playing = false; setPlayIcon();
   setProgress(Number(e.target.value) / 1000);
 });
+document.querySelectorAll('#viewmodes button').forEach(b =>
+  b.addEventListener('click', () => {
+    if (!ride) return;
+    viewMode = b.dataset.mode;
+    rebuildGeometry();   // route height + curtain depend on the mode
+    applyViewMode();     // visibilities, playback, button state
+    if (!follow) frameCamera(); // reframe: ribbon vs specimen have different extents
+  }));
 document.getElementById('follow').addEventListener('click', e => {
   follow = !follow; e.target.classList.toggle('on', follow);
   if (!ride) return;
