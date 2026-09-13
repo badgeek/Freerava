@@ -196,10 +196,6 @@ const COL = {
 const app = document.getElementById('app');
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-// r155+ defaults to physical light units, which renders our Lambert-lit
-// map/markers ~30% too dark (the unlit route stays vivid — hence the muddy
-// map next to a bright line). Legacy units make ambient+sun sum literally.
-renderer.useLegacyLights = true;
 app.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -219,14 +215,10 @@ const grid = new THREE.GridHelper(4000, 80, COL.grid, COL.grid2);
 grid.material.transparent = true; grid.material.opacity = 0.9;
 scene.add(grid);
 
-// Soft light rig — only the Lambert meshes (terrain, flags, bike) react;
-// the unlit route/curtain/slab-side materials ignore it. Ambient + sun sum
-// to ~1.0 on flat ground so the draped map keeps its true colours (higher
-// totals clip the texture toward white and wash the roads out).
-scene.add(new THREE.AmbientLight(0xffffff, 0.68));
-const sun = new THREE.DirectionalLight(0xffffff, 0.38);
-sun.position.set(300, 600, 200);
-scene.add(sun);
+// No lights anywhere: every material is unlit (MeshBasicMaterial), and the
+// terrain's relief shading is baked into vertex colours (see refreshTerrain).
+// That keeps the draped map at its true colours and sidesteps three's
+// r155+ physical-light-units migration entirely.
 
 // ---- ride state ----
 let ride = null;
@@ -241,7 +233,7 @@ function disposeObj(o) {
 function clearRide() {
   if (!ride) return;
   for (const o of [ride.route, ride.curtain, ride.head, ride.startDot,
-                   ride.endDot, ride.slab])
+                   ride.endDot, ride.terrain, ride.skirt, ride.cap, ride.slab])
     disposeObj(o);
   grid.visible = true;
   document.getElementById('attrib').style.display = 'none';
@@ -275,7 +267,7 @@ function project(coords) {
 function makeFlag(color, checkered = false) {
   const gp = new THREE.Group();
   const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 24, 8),
-    new THREE.MeshLambertMaterial({ color: 0x8b8b94 }));
+    new THREE.MeshBasicMaterial({ color: 0x6b6b74 }));
   pole.position.y = 12;
   gp.add(pole);
   let mat;
@@ -289,15 +281,15 @@ function makeFlag(color, checkered = false) {
     }
     const t = new THREE.CanvasTexture(c);
     t.colorSpace = THREE.SRGBColorSpace;
-    mat = new THREE.MeshLambertMaterial({ map: t, side: THREE.DoubleSide });
+    mat = new THREE.MeshBasicMaterial({ map: t, side: THREE.DoubleSide });
   } else {
-    mat = new THREE.MeshLambertMaterial({ color, side: THREE.DoubleSide });
+    mat = new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide });
   }
   const flag = new THREE.Mesh(new THREE.PlaneGeometry(13, 8), mat);
   flag.position.set(6.9, 19.5, 0);
   gp.add(flag);
   const base = new THREE.Mesh(new THREE.CylinderGeometry(2, 3, 1.6, 10),
-    new THREE.MeshLambertMaterial({ color: 0x6d6d78 }));
+    new THREE.MeshBasicMaterial({ color: 0x55555e }));
   base.position.y = 0.8;
   gp.add(base);
   scene.add(gp);
@@ -307,25 +299,27 @@ function makeFlag(color, checkered = false) {
 // Current position: a low-poly bike built from primitives, facing +X.
 function makeBike() {
   const g = new THREE.Group();
-  const orange = new THREE.MeshLambertMaterial({ color: COL.accent });
-  const dark = new THREE.MeshLambertMaterial({ color: 0x2b2b31 });
+  // Unlit, so tubes get slightly different tones to keep the form readable.
+  const frame = new THREE.MeshBasicMaterial({ color: COL.accent });
+  const frameLo = new THREE.MeshBasicMaterial({ color: 0xc43f00 });
+  const dark = new THREE.MeshBasicMaterial({ color: 0x2b2b31 });
   const wheelG = new THREE.TorusGeometry(4, 0.8, 6, 14);
   const w1 = new THREE.Mesh(wheelG, dark); w1.position.set(-5.5, 4, 0); g.add(w1);
   const w2 = new THREE.Mesh(wheelG, dark); w2.position.set(5.5, 4, 0); g.add(w2);
-  const tube = (ax, ay, bx, by, r = 0.7) => {
+  const tube = (ax, ay, bx, by, mat, r = 0.7) => {
     const a = new THREE.Vector3(ax, ay, 0), b = new THREE.Vector3(bx, by, 0);
     const d = new THREE.Vector3().subVectors(b, a);
-    const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, d.length(), 6), orange);
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, d.length(), 6), mat);
     m.position.copy(a).addScaledVector(d, 0.5);
     m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.clone().normalize());
     g.add(m);
   };
-  tube(-5.5, 4, -1.2, 9.2);   // seat stay
-  tube(-5.5, 4, 1.5, 3.6);    // chain stay
-  tube(1.5, 3.6, -1.2, 9.2);  // seat tube
-  tube(1.5, 3.6, 4.6, 9.2);   // down tube
-  tube(-1.2, 9.2, 4.6, 9.2);  // top tube
-  tube(4.6, 9.2, 5.5, 4);     // fork
+  tube(-5.5, 4, -1.2, 9.2, frameLo); // seat stay
+  tube(-5.5, 4, 1.5, 3.6, frameLo);  // chain stay
+  tube(1.5, 3.6, -1.2, 9.2, frame);  // seat tube
+  tube(1.5, 3.6, 4.6, 9.2, frame);   // down tube
+  tube(-1.2, 9.2, 4.6, 9.2, frame);  // top tube
+  tube(4.6, 9.2, 5.5, 4, frameLo);   // fork
   const saddle = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.9, 1.5), dark);
   saddle.position.set(-1.6, 10, 0); g.add(saddle);
   const bars = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 5.2), dark);
@@ -453,75 +447,23 @@ const loadImg = url => new Promise((res, rej) => {
   im.src = url;
 });
 
-// -- Primary map source: MapLibre GL + OpenFreeMap (free, no API key — the
-// same tile host the cyclomp app uses). The bbox is rendered once in a
-// hidden container, grabbed as a canvas, and the map is thrown away.
-let maplibreLoad = null;
-function loadMapLibre() {
-  if (window.maplibregl) return Promise.resolve();
-  if (!maplibreLoad) maplibreLoad = new Promise((res, rej) => {
-    const css = document.createElement('link');
-    css.rel = 'stylesheet';
-    css.href = 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css';
-    document.head.appendChild(css);
-    const s = document.createElement('script');
-    s.src = 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js';
-    s.onload = () => res(); s.onerror = () => rej(new Error('maplibre load failed'));
-    document.head.appendChild(s);
-  });
-  return maplibreLoad;
-}
-
-async function renderVectorMap(lonW, latS, lonE, latN) {
-  await loadMapLibre();
-  const aspect = (mercX(lonE) - mercX(lonW)) / (mercY(latS) - mercY(latN));
-  const base = 1536;
-  const w = aspect >= 1 ? base : Math.max(256, Math.round(base * aspect));
-  const h = aspect >= 1 ? Math.max(256, Math.round(base / aspect)) : base;
-  const div = document.createElement('div');
-  div.style.cssText = `position:fixed;left:-10000px;top:0;width:${w}px;height:${h}px;`;
-  document.body.appendChild(div);
-  return new Promise((res, rej) => {
-    const m = new maplibregl.Map({
-      container: div,
-      // "liberty": coloured roads with proper casings — reads clearly on the
-      // slab where the near-white "positron" style washed out.
-      style: 'https://tiles.openfreemap.org/styles/liberty',
-      interactive: false, attributionControl: false,
-      preserveDrawingBuffer: true, fadeDuration: 0, pixelRatio: 2,
-    });
-    const cleanup = () => { clearTimeout(to); try { m.remove(); } catch {} div.remove(); };
-    const to = setTimeout(() => { cleanup(); rej(new Error('map render timeout')); }, 20000);
-    m.once('load', () => {
-      m.fitBounds([[lonW, latS], [lonE, latN]], { padding: 0, duration: 0 });
-      m.once('idle', () => {
-        try {
-          const src = m.getCanvas();
-          const c = document.createElement('canvas');
-          c.width = src.width; c.height = src.height;
-          const ctx = c.getContext('2d');
-          // A touch of pop so the draped texture stays legible at an angle.
-          ctx.filter = 'saturate(1.15) contrast(1.05)';
-          ctx.drawImage(src, 0, 0);
-          cleanup(); res(c);
-        } catch (e) { cleanup(); rej(e); }
-      });
-    });
-  });
-}
-
-// -- Fallback: stitch OSM standard raster tiles (no key either), cropped to
-// the exact bbox. Busier style, but keeps the slab working if the vector
-// path is blocked.
+// -- Basemap: stitch OSM standard raster tiles (free, no API key) onto a 2D
+// canvas and crop to the exact bbox. Deliberately NOT MapLibre GL: a second
+// WebGL context on the page made the browser drop the Three.js one ("WebGL
+// context was lost" -> shader validation failures -> blank viewer). A 2D
+// canvas needs no GL context, and OSM's road colours read well on the slab.
 async function rasterStitch(lonW, latS, lonE, latN) {
   const TS = 256;
+  // Highest zoom that still fits a 4096 px texture and a polite tile count.
+  // (Capping the LONG side matters for narrow out-and-back routes: a 616 x
+  // 3647 m strip would otherwise drop to z16 and blur the streets.)
   let z = 3;
   for (let cand = 19; cand >= 3; cand--) {
     const w = (mercX(lonE) - mercX(lonW)) * (1 << cand) * TS;
     const h = (mercY(latS) - mercY(latN)) * (1 << cand) * TS;
     const tiles = (Math.floor(mercX(lonE) * (1 << cand)) - Math.floor(mercX(lonW) * (1 << cand)) + 1) *
                   (Math.floor(mercY(latS) * (1 << cand)) - Math.floor(mercY(latN) * (1 << cand)) + 1);
-    if (Math.max(w, h) <= 2048 && tiles <= 30) { z = cand; break; }
+    if (Math.max(w, h) <= 4096 && tiles <= 64) { z = cand; break; }
   }
   const n = 1 << z;
   const tx0 = Math.floor(mercX(lonW) * n), tx1 = Math.floor(mercX(lonE) * n);
@@ -541,19 +483,20 @@ async function rasterStitch(lonW, latS, lonE, latN) {
   const sw = px(mercX(lonE)) - px(mercX(lonW)), sh = px(mercY(latS)) - px(mercY(latN));
   const crop = document.createElement('canvas');
   crop.width = Math.max(2, Math.round(sw)); crop.height = Math.max(2, Math.round(sh));
-  crop.getContext('2d').drawImage(stitched, sx, sy, sw, sh, 0, 0, crop.width, crop.height);
+  const ctx = crop.getContext('2d');
+  // A touch of pop so the draped texture stays legible at a viewing angle.
+  ctx.filter = 'saturate(1.1) contrast(1.06)';
+  ctx.drawImage(stitched, sx, sy, sw, sh, 0, 0, crop.width, crop.height);
   return crop;
 }
 
 const OSM_LINK = '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors';
 async function mapCanvasForBbox(lonW, latS, lonE, latN) {
-  try {
-    return { canvas: await renderVectorMap(lonW, latS, lonE, latN),
-             attrib: OSM_LINK + ' &middot; <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a>' };
-  } catch {}
   return { canvas: await rasterStitch(lonW, latS, lonE, latN), attrib: OSM_LINK };
 }
 
+let _earthTex = null;
+function earthTex() { return _earthTex || (_earthTex = earthSideTexture()); }
 function earthSideTexture() {
   const c = document.createElement('canvas');
   c.width = 4; c.height = 128;
@@ -617,40 +560,59 @@ async function fetchDem(lonW, latS, lonE, latN) {
 // Vertical scale for real elevation (the relief slider, gentled: default 2x).
 const exagT = () => exag / 6;
 
-// (Re)build the slab's top at the current relief: a map-draped heightfield
-// with a soil skirt when a DEM is available, a flat plane otherwise.
+// (Re)build the whole specimen block at the current relief: a map-draped top
+// (a heightfield when a DEM is available, flat otherwise), ONE continuous
+// earth wall running from the terrain rim down to the base, and a bottom cap.
+// The wall is a single piece on purpose — an earlier version stacked a
+// gradient-textured box under a separately-coloured skirt, and the join
+// showed up as a horizontal seam across the side of the block.
 function refreshTerrain(g) {
   if (!g.slab || !g.slabX) return;
   const kill = m => {
     if (!m) return;
     g.slab.remove(m); m.geometry?.dispose?.(); m.material?.dispose?.();
   };
-  kill(g.terrain); kill(g.skirt); g.terrain = g.skirt = null;
-  const { xW, xE, zN, zS, w, d } = g.slabX;
+  kill(g.terrain); kill(g.skirt); kill(g.cap);
+  g.terrain = g.skirt = g.cap = null;
+
+  const { xW, xE, zN, zS, w, d, thick } = g.slabX;
   const cx = (xW + xE) / 2, cz = (zN + zS) / 2;
-
-  if (!g.demSample) {
-    const topGeo = new THREE.PlaneGeometry(w, d);
-    topGeo.rotateX(-Math.PI / 2); // plane "up" edge -> -Z = north
-    g.terrain = new THREE.Mesh(topGeo, new THREE.MeshBasicMaterial({ map: g.mapTex }));
-    g.terrain.position.set(cx, 0.15, cz);
-    g.slab.add(g.terrain);
-    return;
-  }
-
+  const sample = g.demSample || (() => 0);
   const ex = exagT();
-  const N = 96;
+  const N = g.demSample ? 96 : 2; // flat slab needs just the four corners
+
+  // ---- top: map-draped surface ----
   const geo = new THREE.PlaneGeometry(w, d, N - 1, N - 1);
-  geo.rotateX(-Math.PI / 2);
+  geo.rotateX(-Math.PI / 2); // plane "up" edge -> -Z = north
   const pos = geo.attributes.position;
   for (let i = 0; i < pos.count; i++)
-    pos.setY(i, g.demSample(cx + pos.getX(i), cz + pos.getZ(i)) * ex);
+    pos.setY(i, sample(cx + pos.getX(i), cz + pos.getZ(i)) * ex);
   geo.computeVertexNormals();
-  g.terrain = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ map: g.mapTex }));
+
+  if (g.demSample) {
+    // Hillshade baked into vertex colours instead of a light: the material
+    // stays unlit, so the map texture keeps its exact colours (roads
+    // readable) and nothing depends on three's lighting units. Flat ground
+    // lands on exactly 1.0; only real slopes darken or brighten.
+    const L = new THREE.Vector3(0.45, 0.82, 0.35).normalize();
+    const e = Math.max(1, Math.max(w, d) / N);
+    const shade = new Float32Array(pos.count * 3);
+    for (let i = 0; i < pos.count; i++) {
+      const x = cx + pos.getX(i), zc = cz + pos.getZ(i);
+      const h = sample(x, zc) * ex;
+      const hx = sample(x + e, zc) * ex, hz = sample(x, zc + e) * ex;
+      const nrm = new THREE.Vector3(-(hx - h) / e, 1, -(hz - h) / e).normalize();
+      const f = Math.min(1.12, Math.max(0.72, nrm.dot(L) / L.y));
+      shade[i * 3] = shade[i * 3 + 1] = shade[i * 3 + 2] = f;
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(shade, 3));
+  }
+  g.terrain = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+    map: g.mapTex, vertexColors: !!g.demSample }));
   g.terrain.position.set(cx, 0.15, cz);
   g.slab.add(g.terrain);
 
-  // Soil skirt: close the gap between the raised relief edge and the box.
+  // ---- side wall: rim -> base, in one piece ----
   const idx = (ix, iz) => iz * N + ix;
   const rim = [];
   for (let ix = 0; ix < N; ix++) rim.push(idx(ix, 0));
@@ -658,19 +620,34 @@ function refreshTerrain(g) {
   for (let ix = N - 2; ix >= 0; ix--) rim.push(idx(ix, N - 1));
   for (let iz = N - 2; iz >= 1; iz--) rim.push(idx(0, iz));
   rim.push(idx(0, 0));
-  const sp = [];
+
+  const sp = [], suv = [];
+  const bottom = -thick;
   for (let k = 0; k < rim.length - 1; k++) {
     const a = rim[k], b = rim[k + 1];
     const ax = cx + pos.getX(a), ay = pos.getY(a) + 0.15, az = cz + pos.getZ(a);
     const bx = cx + pos.getX(b), by = pos.getY(b) + 0.15, bz = cz + pos.getZ(b);
-    sp.push(ax, ay, az, bx, by, bz, ax, -1, az,
-            bx, by, bz, bx, -1, bz, ax, -1, az);
+    sp.push(ax, ay, az,  bx, by, bz,  ax, bottom, az,
+            bx, by, bz,  bx, bottom, bz,  ax, bottom, az);
+    // v = 1 at the surface (topsoil), 0 at the base (bedrock); flipY on the
+    // CanvasTexture puts the light end of the gradient at v = 1.
+    const ua = k / (rim.length - 1), ub = (k + 1) / (rim.length - 1);
+    suv.push(ua, 1,  ub, 1,  ua, 0,
+             ub, 1,  ub, 0,  ua, 0);
   }
   const sg = new THREE.BufferGeometry();
   sg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(sp), 3));
+  sg.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(suv), 2));
   g.skirt = new THREE.Mesh(sg, new THREE.MeshBasicMaterial({
-    color: 0xa97e56, side: THREE.DoubleSide }));
+    map: earthTex(), side: THREE.DoubleSide }));
   g.slab.add(g.skirt);
+
+  // ---- base cap ----
+  const capGeo = new THREE.PlaneGeometry(w, d);
+  capGeo.rotateX(Math.PI / 2); // faces down
+  g.cap = new THREE.Mesh(capGeo, new THREE.MeshBasicMaterial({ color: 0x4a3628 }));
+  g.cap.position.set(cx, bottom, cz);
+  g.slab.add(g.cap);
 }
 
 async function buildSlab(g) {
@@ -721,17 +698,14 @@ async function buildSlab(g) {
     };
   }
 
-  const thick = Math.max(14, 0.06 * Math.max(w, d));
+  // Block depth: proportional to the footprint, but capped so a long ride
+  // doesn't turn into a skyscraper of soil.
+  g.slabX.thick = Math.min(120, Math.max(14, 0.05 * Math.min(w, d) + 10));
   const slab = new THREE.Group();
-  const sides = new THREE.Mesh(
-    new THREE.BoxGeometry(w, thick, d),
-    new THREE.MeshBasicMaterial({ map: earthSideTexture() }));
-  sides.position.set((xW + xE) / 2, -thick / 2, (zN + zS) / 2);
-  slab.add(sides);
   scene.add(slab);
   g.slab = slab;
 
-  refreshTerrain(g);   // heightfield (or flat) top
+  refreshTerrain(g);   // top + side wall + base cap, in one pass
   rebuildGeometry();   // drape the route + curtain onto the relief
 
   grid.visible = false;
