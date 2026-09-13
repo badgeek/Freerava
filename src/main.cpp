@@ -9,6 +9,7 @@
 #include "core/mock_telemetry.h"
 #include "core/ride_engine.h"
 #include "core/session_store.h"
+#include "core/settings.h"
 #include "core/track.h"
 
 #ifdef __ANDROID__
@@ -89,6 +90,25 @@ std::string sessions_path() {
 #endif
 }
 
+// Where the tunable parameters live between runs.
+std::string settings_path() {
+#ifdef __ANDROID__
+    ::mkdir("/data/data/dev.bauhouse.cyclomp/files", 0700); // EEXIST is fine
+    return "/data/data/dev.bauhouse.cyclomp/files/settings.txt";
+#else
+    const char *h = std::getenv("HOME");
+    return std::string(h ? h : ".") + "/.cyclomp_settings.txt";
+#endif
+}
+
+// Refresh the SETTINGS screen's value strings from the current values.
+void publish_settings(AppWindow &w, const core::Settings &s) {
+    w.set_set_zoom_value(fmt0((float)s.follow_zoom));
+    w.set_set_heading_speed_value(fmt0((float)s.heading_speed_kmh));
+    w.set_set_bearing_delta_value(fmt0((float)s.bearing_min_delta_deg));
+    w.set_set_mock_value(slint::SharedString(s.mock_ride ? "ON" : "OFF"));
+}
+
 // Reset the live view to a resting/idle state.
 void publish_idle(AppWindow &w, bool sensors) {
     w.set_speed(0.f);
@@ -148,14 +168,20 @@ int main(int, char **)
 {
     auto ui = AppWindow::create();
 
+    // Tunables (SETTINGS screen). Loaded before anything consumes them.
+    auto settings = std::make_shared<core::Settings>();
+    core::load_settings(settings_path(), *settings);
+    publish_settings(*ui, *settings);
+
     // Telemetry: real GPS on Android, the RNG mock everywhere else.
-    // CYCLOMP_MOCK_RIDE=1 forces the mock on Android too (demo mode).
+    // CYCLOMP_MOCK_RIDE=1 or the settings toggle forces the mock on Android
+    // too (demo mode) — env vars can't be injected via adb, settings can.
     std::shared_ptr<core::MockTelemetrySource> mock;
     std::shared_ptr<core::TelemetrySource> source;
 #ifdef __ANDROID__
     std::shared_ptr<gps::AndroidTelemetrySource> gps_source;
     const char *mock_env = std::getenv("CYCLOMP_MOCK_RIDE");
-    if (!(mock_env && mock_env[0] == '1')) {
+    if (!((mock_env && mock_env[0] == '1') || settings->mock_ride)) {
         gps_source = std::make_shared<gps::AndroidTelemetrySource>();
         source = gps_source;
     }
@@ -444,7 +470,7 @@ int main(int, char **)
         ui->set_screen(std::atoi(s));
 
     // ---- Camera: core follow-mode decisions + a sink to the platform map ----
-    auto camera = std::make_shared<core::FollowCamera>(15.0);
+    auto camera = std::make_shared<core::FollowCamera>(settings->follow_zoom);
     std::function<void(const core::CameraUpdate &)> cam_sink =
         [](const core::CameraUpdate &) {};
 #if defined(CYCLOMP_HAVE_MAPLIBRE) && !defined(CYCLOMP_MAP_GL)
@@ -550,6 +576,47 @@ int main(int, char **)
         if (auto up = camera->on_position(la, lo)) cam_sink(*up);
         (*u)->set_map_following(camera->following());
         publish_marker(**u);
+    });
+
+    // SETTINGS: step / toggle / per-parameter reset (dir 0), then persist.
+    // A follow-zoom change is pushed to the map right away while following.
+    auto apply_settings = [ui = slint::ComponentWeakHandle(ui), settings,
+                           camera, cam_sink, current_position](bool zoom_changed) {
+        *settings = core::clamp_settings(*settings);
+        core::save_settings(settings_path(), *settings);
+        auto u = ui.lock();
+        if (!u) return;
+        publish_settings(**u, *settings);
+        double la, lo;
+        if (zoom_changed && camera->following() && current_position(la, lo))
+            cam_sink({la, lo, settings->follow_zoom});
+    };
+    ui->on_setting_adjust([settings, apply_settings](int id, int dir) {
+        const core::Settings def;
+        switch (id) {
+        case 0:
+            settings->follow_zoom =
+                dir == 0 ? def.follow_zoom : settings->follow_zoom + dir;
+            break;
+        case 1:
+            settings->heading_speed_kmh =
+                dir == 0 ? def.heading_speed_kmh
+                         : settings->heading_speed_kmh + dir;
+            break;
+        case 2:
+            settings->bearing_min_delta_deg =
+                dir == 0 ? def.bearing_min_delta_deg
+                         : settings->bearing_min_delta_deg + dir;
+            break;
+        case 3:
+            settings->mock_ride = dir == 0 ? def.mock_ride : !settings->mock_ride;
+            break;
+        }
+        apply_settings(id == 0);
+    });
+    ui->on_settings_reset([settings, apply_settings] {
+        *settings = core::Settings{};
+        apply_settings(true);
     });
 
     ui->on_map_zoom([=](int delta) {
@@ -661,7 +728,9 @@ int main(int, char **)
     timer.start(slint::TimerMode::Repeated, std::chrono::milliseconds(500),
         [ui = slint::ComponentWeakHandle(ui), source, engine, camera, cam_sink,
          sensors, publish_nav, publish_marker, recorder, heading_up,
-         last_course, last_sent_bearing, replay_active, current_position] {
+         last_course, last_sent_bearing, replay_active, current_position,
+         settings] {
+            (void)settings; // consumed only in the Android heading-up block
             auto u = ui.lock();
             if (!u) return;
             auto &w = **u;
@@ -684,7 +753,8 @@ int main(int, char **)
             if (*heading_up && !replay_active->load()) {
                 std::optional<double> hdg;
                 if (engine->state() == core::RideState::Running &&
-                    engine->live().speed_kmh > 7.0 && *last_course)
+                    engine->live().speed_kmh > settings->heading_speed_kmh &&
+                    *last_course)
                     hdg = **last_course;
                 else {
                     double az;
@@ -695,7 +765,8 @@ int main(int, char **)
                     double d = std::fmod(std::fabs(*hdg - *last_sent_bearing),
                                          360.0);
                     if (d > 180.0) d = 360.0 - d;
-                    if (d > 3.0 || *last_sent_bearing < -500.0) {
+                    if (d > settings->bearing_min_delta_deg ||
+                        *last_sent_bearing < -500.0) {
                         mapgl::set_bearing(*hdg);
                         *last_sent_bearing = *hdg;
                     }

@@ -118,6 +118,109 @@ component TabItem inherits Rectangle {
     }
 }
 
+// A tunable parameter row on the SETTINGS screen: label + default hint on
+// the left, the current value, then − / + steppers (or one toggle button).
+component SettingRow inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <string> default-value; // shown as "DEFAULT …" under the label
+    in property <bool> stepper: true;   // false = single ON/OFF toggle
+    callback minus();
+    callback plus();  // also the toggle action when stepper == false
+    callback reset(); // back to this parameter's default
+    height: 64px;
+    background: Palette.ash;
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 8px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        spacing: 10px;
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+            Text {
+                text: root.label;
+                color: Palette.paper;
+                font-size: 13px;
+                font-weight: 700;
+                letter-spacing: 1px;
+            }
+            Text {
+                text: "DEFAULT \{root.default-value}";
+                color: Palette.mute;
+                font-size: 10px;
+                font-weight: 700;
+                letter-spacing: 1px;
+            }
+        }
+        Text {
+            text: root.value;
+            color: Palette.yellow;
+            font-size: 22px;
+            font-weight: 900;
+            vertical-alignment: center;
+        }
+        // Per-parameter reset: dimmed when already at the default.
+        Rectangle {
+            width: 44px;
+            background: Palette.ink;
+            TouchArea { clicked => { root.reset(); } }
+            Text {
+                text: "DEF";
+                color: root.value == root.default-value ? Palette.mute
+                                                        : Palette.red;
+                font-size: 11px;
+                font-weight: 900;
+                letter-spacing: 1px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        if root.stepper : Rectangle {
+            width: 44px;
+            background: Palette.ink;
+            TouchArea { clicked => { root.minus(); } }
+            Text {
+                text: "−";
+                color: Palette.paper;
+                font-size: 22px;
+                font-weight: 900;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        if root.stepper : Rectangle {
+            width: 44px;
+            background: Palette.ink;
+            TouchArea { clicked => { root.plus(); } }
+            Text {
+                text: "+";
+                color: Palette.paper;
+                font-size: 22px;
+                font-weight: 900;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        if !root.stepper : Rectangle {
+            width: 92px;
+            background: root.value == "ON" ? Palette.blue : Palette.ink;
+            TouchArea { clicked => { root.plus(); } }
+            Text {
+                text: root.value == "ON" ? "TURN OFF" : "TURN ON";
+                color: Palette.paper;
+                font-size: 12px;
+                font-weight: 900;
+                letter-spacing: 1px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
 // A ride/pause/stop control button.
 component ControlButton inherits Rectangle {
     in property <string> label;
@@ -203,6 +306,19 @@ export component AppWindow inherits Window {
     // Heading-up mode: the map rotates so the bike's course points up.
     in property <bool> map-heading-up: false;
     callback map-heading-toggle();
+
+    // ---- Settings (screen 4, opened by the sticky gear button) ----
+    // Value strings are owned by C++ (clamp + persist happen there).
+    in property <string> set-zoom-value: "15";
+    in property <string> set-heading-speed-value: "7";
+    in property <string> set-bearing-delta-value: "3";
+    in property <string> set-mock-value: "OFF";
+    // id: 0 follow zoom, 1 heading speed, 2 bearing step, 3 mock ride.
+    // dir: -1 / +1 (ignored for the mock toggle).
+    callback setting-adjust(int, int);
+    callback settings-reset();
+    // Where the gear was pressed, so × returns there.
+    in-out property <int> prev-screen: 0;
 
     callback toggle-ride();  // idle->start, running->pause, paused->resume
     callback stop-ride();    // finalize + save session
@@ -1093,6 +1209,96 @@ export component AppWindow inherits Window {
             }
         }
 
+        // ================= SETTINGS (screen 4) =================
+        if root.screen == 4 : VerticalLayout {
+            vertical-stretch: 1;
+
+            // header: close + title + bauhaus marker
+            Rectangle {
+                height: 76px;
+                background: Palette.ink;
+                HorizontalLayout {
+                    padding: 12px;
+                    spacing: 12px;
+                    Rectangle {
+                        width: 52px;
+                        background: Palette.ash;
+                        TouchArea { clicked => { root.screen = root.prev-screen; } }
+                        Text {
+                            text: "×";
+                            color: Palette.paper;
+                            font-size: 24px;
+                            font-weight: 900;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                    Text {
+                        horizontal-stretch: 1;
+                        text: "SETTINGS";
+                        color: Palette.paper;
+                        font-size: 26px;
+                        font-weight: 900;
+                        letter-spacing: 2px;
+                        vertical-alignment: center;
+                    }
+                    Rectangle {
+                        width: 18px;
+                        height: 18px;
+                        y: (parent.height - self.height) / 2;
+                        background: Palette.yellow;
+                    }
+                }
+            }
+
+            VerticalLayout {
+                padding: 12px;
+                spacing: 8px;
+                SettingRow {
+                    label: "FOLLOW ZOOM";
+                    value: root.set-zoom-value;
+                    default-value: "15";
+                    minus => { root.setting-adjust(0, -1); }
+                    plus => { root.setting-adjust(0, 1); }
+                    reset => { root.setting-adjust(0, 0); }
+                }
+                SettingRow {
+                    label: "HEADING SPEED  km/h";
+                    value: root.set-heading-speed-value;
+                    default-value: "7";
+                    minus => { root.setting-adjust(1, -1); }
+                    plus => { root.setting-adjust(1, 1); }
+                    reset => { root.setting-adjust(1, 0); }
+                }
+                SettingRow {
+                    label: "BEARING STEP  deg";
+                    value: root.set-bearing-delta-value;
+                    default-value: "3";
+                    minus => { root.setting-adjust(2, -1); }
+                    plus => { root.setting-adjust(2, 1); }
+                    reset => { root.setting-adjust(2, 0); }
+                }
+                SettingRow {
+                    label: "MOCK RIDE  (restart)";
+                    value: root.set-mock-value;
+                    default-value: "OFF";
+                    stepper: false;
+                    plus => { root.setting-adjust(3, 1); }
+                    reset => { root.setting-adjust(3, 0); }
+                }
+                HorizontalLayout {
+                    height: 52px;
+                    ControlButton {
+                        label: "RESET DEFAULTS";
+                        fill: Palette.red;
+                        pressed => { root.settings-reset(); }
+                    }
+                }
+            }
+
+            Rectangle { vertical-stretch: 1; background: Palette.ink; }
+        }
+
         // ---- Tab bar: RIDE | MAP | HISTORY ----
         HorizontalLayout {
             height: 52px;
@@ -1108,7 +1314,8 @@ export component AppWindow inherits Window {
             }
             TabItem {
                 label: "HISTORY";
-                active: root.screen >= 2; // 3 = a ride's detail page
+                // 3 = a ride's detail page; 4 (settings) lights no tab
+                active: root.screen == 2 || root.screen == 3;
                 pressed => { root.screen = 2; }
             }
         }
@@ -1119,5 +1326,31 @@ export component AppWindow inherits Window {
             height: root.bottom-inset;
             background: Palette.ink;
         }
+    }
+
+    // Sticky settings button, top-right on the three main screens (the
+    // detail page keeps its own header, settings shows ×). Bauhaus mixer
+    // glyph: three bars with offset primary-color knobs — no unicode gear,
+    // it would render as tofu in the bundled font.
+    if root.screen <= 2 : Rectangle {
+        x: parent.width - 56px;
+        y: root.top-inset + 8px;
+        width: 48px;
+        height: 48px;
+        background: Palette.ink;
+        border-width: 2px;
+        border-color: Palette.ash;
+        TouchArea {
+            clicked => {
+                root.prev-screen = root.screen;
+                root.screen = 4;
+            }
+        }
+        Rectangle { x: 14px; y: 15px; width: 20px; height: 2px; background: Palette.paper; }
+        Rectangle { x: 14px; y: 23px; width: 20px; height: 2px; background: Palette.paper; }
+        Rectangle { x: 14px; y: 31px; width: 20px; height: 2px; background: Palette.paper; }
+        Rectangle { x: 16px; y: 13px; width: 6px; height: 6px; background: Palette.yellow; }
+        Rectangle { x: 26px; y: 21px; width: 6px; height: 6px; background: Palette.red; }
+        Rectangle { x: 20px; y: 29px; width: 6px; height: 6px; background: Palette.blue; }
     }
 }

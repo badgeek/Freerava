@@ -13,6 +13,7 @@ add_library(cyclomp_core STATIC
     src/core/mock_telemetry.cpp
     src/core/ride_engine.cpp
     src/core/session_store.cpp
+    src/core/settings.cpp
     src/core/track.cpp)
 target_include_directories(cyclomp_core PUBLIC src)
 target_compile_features(cyclomp_core PUBLIC cxx_std_20)
@@ -175,6 +176,7 @@ if(NOT ANDROID)
             tests/test_ride_engine.cpp
             tests/test_mock_telemetry.cpp
             tests/test_follow_camera.cpp
+            tests/test_settings.cpp
             tests/test_track.cpp)
         target_link_libraries(cyclomp_tests PRIVATE cyclomp_core doctest::doctest)
         add_test(NAME cyclomp_tests COMMAND cyclomp_tests)
