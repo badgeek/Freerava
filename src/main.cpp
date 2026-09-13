@@ -8,6 +8,12 @@
 #include "core/format.h"
 #include "core/mock_telemetry.h"
 #include "core/ride_engine.h"
+#include "core/session_store.h"
+#include "core/track.h"
+
+#ifdef __ANDROID__
+#include <sys/stat.h>
+#endif
 
 #include <functional>
 
@@ -69,6 +75,17 @@ SessionRow to_row(const core::SessionSummary &s) {
         s.has_cadence ? fmt_int(s.avg_cadence) : slint::SharedString("--"),
         s.has_hr ? fmt_int(s.avg_hr) : slint::SharedString("--"),
     };
+}
+
+// Where finished rides live between runs.
+std::string sessions_path() {
+#ifdef __ANDROID__
+    ::mkdir("/data/data/dev.bauhouse.cyclomp/files", 0700); // EEXIST is fine
+    return "/data/data/dev.bauhouse.cyclomp/files/sessions.txt";
+#else
+    const char *h = std::getenv("HOME");
+    return std::string(h ? h : ".") + "/.cyclomp_sessions.txt";
+#endif
 }
 
 // Reset the live view to a resting/idle state.
@@ -205,10 +222,31 @@ int main(int, char **)
 
     auto engine = std::make_shared<core::RideEngine>();
     auto log = std::make_shared<core::SessionLog>();
+    auto recorder = std::make_shared<core::TrackRecorder>();
 
-    // History of finished rides, newest first. In-memory for the mock.
+    // History of finished rides, newest first; persisted across restarts.
     auto sessions = std::make_shared<slint::VectorModel<SessionRow>>();
+    core::load_sessions(sessions_path(), *log);
+    for (const auto &s : log->newest_first()) sessions->push_back(to_row(s));
     ui->set_sessions(sessions);
+
+    // Tap on a history row: toggle selection + build its infographics.
+    ui->on_select_session([ui = slint::ComponentWeakHandle(ui), log](int i) {
+        auto u = ui.lock();
+        if (!u) return;
+        auto &w = **u;
+        if (w.get_selected_session() == i) {
+            w.set_selected_session(-1);
+            return;
+        }
+        const auto &rows = log->newest_first();
+        if (i < 0 || (size_t)i >= rows.size()) return;
+        w.set_sel_speed_path(
+            slint::SharedString(core::speed_sparkline_path(rows[i].track, 300, 70)));
+        w.set_sel_track_path(
+            slint::SharedString(core::track_shape_path(rows[i].track, 300, 120)));
+        w.set_selected_session(i);
+    });
     publish_idle(*ui, sensors);
     publish_nav(*ui);
 
@@ -369,13 +407,17 @@ int main(int, char **)
 #endif
     ui->on_toggle_ride(
         [ui = slint::ComponentWeakHandle(ui), mock, engine, camera, sensors,
-         publish_nav, on_ride_start] {
+         publish_nav, on_ride_start, recorder] {
             auto u = ui.lock();
             if (!u) return;
             auto &w = **u;
             if (engine->state() == core::RideState::Idle) {
                 on_ride_start();
                 if (mock) mock->reset_ride();
+                recorder->reset();
+#if defined(CYCLOMP_MAP_GL)
+                mapgl::set_track({}); // clear the previous ride's line
+#endif
                 publish_idle(w, sensors);
                 publish_nav(w);
                 camera->relock(); // camera back onto the rider
@@ -387,14 +429,16 @@ int main(int, char **)
     // Finalize the ride: save a summary row, then return to idle.
     ui->on_stop_ride(
         [ui = slint::ComponentWeakHandle(ui), engine, log, sessions, sensors,
-         publish_nav] {
+         publish_nav, recorder] {
             auto u = ui.lock();
             if (!u) return;
             auto &w = **u;
             if (engine->state() == core::RideState::Idle) return;
             if (auto s = engine->stop(std::time(nullptr))) {
+                s->track = recorder->points();
                 log->add(*s);
                 sessions->insert(0, to_row(*s)); // newest first
+                core::save_sessions(sessions_path(), *log);
             }
             publish_idle(w, sensors);
             publish_nav(w);
@@ -406,7 +450,7 @@ int main(int, char **)
     static slint::Timer timer;
     timer.start(slint::TimerMode::Repeated, std::chrono::milliseconds(500),
         [ui = slint::ComponentWeakHandle(ui), source, engine, camera, cam_sink,
-         sensors, publish_nav, publish_marker] {
+         sensors, publish_nav, publish_marker, recorder] {
             auto u = ui.lock();
             if (!u) return;
             auto &w = **u;
@@ -418,8 +462,21 @@ int main(int, char **)
             auto s = source->sample(0.5);
             engine->tick(0.5, s);
             publish_live(w, engine->live(), sensors);
-            if (s.valid)
+            if (s.valid) {
+                recorder->add(s.lat, s.lon, s.speed_kmh,
+                              engine->live().elapsed_s);
+#if defined(CYCLOMP_MAP_GL)
+                // Refresh the route line every other point (~1 Hz).
+                if (recorder->points().size() % 2 == 0) {
+                    std::vector<std::pair<double, double>> pts;
+                    pts.reserve(recorder->points().size());
+                    for (const auto &tp : recorder->points())
+                        pts.emplace_back(tp.lat, tp.lon);
+                    mapgl::set_track(std::move(pts));
+                }
+#endif
                 if (auto up = camera->on_position(s.lat, s.lon)) cam_sink(*up);
+            }
         });
 
 #if defined(CYCLOMP_MAP_GL)

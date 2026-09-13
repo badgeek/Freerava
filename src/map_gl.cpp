@@ -10,6 +10,9 @@
 #include <mln/map/map_observer.hpp>
 #include <mln/map/map_options.hpp>
 #include <mln/storage/resource_options.hpp>
+#include <mapbox/geojson.hpp>
+#include <mln/style/layers/line_layer.hpp>
+#include <mln/style/sources/geojson_source.hpp>
 #include <mln/style/style.hpp>
 #include <mln/util/run_loop.hpp>
 
@@ -71,6 +74,10 @@ struct Service {
     double dx = 0, dy = 0;         // accumulated pan (logical px)
     double scale = 1.0;            // accumulated pinch factor
     double ax = 0, ay = 0;         // pinch anchor (logical px)
+
+    // Live ride track (lat/lon pairs, UI thread writes, map thread applies).
+    std::vector<std::pair<double, double>> track;
+    bool trackDirty = false;
 
     // Rider marker: set from the UI thread, projected on the map thread.
     double markerLat = 0, markerLon = 0;
@@ -185,16 +192,20 @@ void threadMain() {
     int cur = 0;
 
     for (;;) {
-        bool ctr, mset;
+        bool ctr, mset, trk;
         double la, lo, zm, dx, dy, sc, ax, ay, mlat, mlon;
+        std::vector<std::pair<double, double>> trackPts;
         uint64_t gen;
         {
             std::unique_lock<std::mutex> lk(s.m);
             s.cv.wait(lk, [&] {
                 return s.centerDirty || s.renderDirty || s.dx != 0 ||
-                       s.dy != 0 || s.scale != 1.0;
+                       s.dy != 0 || s.scale != 1.0 || s.trackDirty;
             });
             gen = s.cmdGen;
+            trk = s.trackDirty;
+            s.trackDirty = false;
+            if (trk) trackPts = s.track;
             ctr = s.centerDirty;
             s.centerDirty = false;
             s.renderDirty = false;
@@ -220,6 +231,36 @@ void threadMain() {
         if (sc != 1.0)
             map.scaleBy(sc, mln::ScreenCoordinate{ax, ay});
         if (dx != 0 || dy != 0) map.moveBy(mln::ScreenCoordinate{dx, dy});
+
+        // Live route line (Bauhaus yellow). Source/layer added lazily on the
+        // first update; the style is loaded by then (the map has rendered).
+        if (trk) {
+            static bool trackLayerAdded = false;
+            try {
+                if (!trackLayerAdded) {
+                    map.getStyle().addSource(
+                        std::make_unique<mln::style::GeoJSONSource>("cyclomp-track"));
+                    auto line = std::make_unique<mln::style::LineLayer>(
+                        "cyclomp-track-line", "cyclomp-track");
+                    line->setLineColor(mln::Color{0.953f, 0.772f, 0.0f, 1.f});
+                    line->setLineWidth(4.f);
+                    line->setLineCap(mln::style::LineCapType::Round);
+                    line->setLineJoin(mln::style::LineJoinType::Round);
+                    map.getStyle().addLayer(std::move(line));
+                    trackLayerAdded = true;
+                }
+                mapbox::geometry::line_string<double> ls;
+                ls.reserve(trackPts.size());
+                for (auto &p : trackPts) ls.push_back({p.second, p.first}); // x=lon
+                auto *src = static_cast<mln::style::GeoJSONSource *>(
+                    map.getStyle().getSource("cyclomp-track"));
+                if (src)
+                    src->setGeoJSON(mapbox::geojson::geojson{
+                        mapbox::geometry::geometry<double>{ls}});
+            } catch (const std::exception &e) {
+                MAPGL_LOG("track layer error: %s", e.what());
+            }
+        }
 
         // Same flow as HeadlessFrontend::render(), with a GPU blit instead of
         // readStillImage(): renderStill waits until all tiles are loaded.
@@ -343,6 +384,17 @@ void set_marker(double lat, double lon) {
         }
     }
     if (moved) s.cv.notify_one();
+}
+
+void set_track(std::vector<std::pair<double, double>> pts) {
+    auto &s = svc();
+    {
+        std::lock_guard<std::mutex> lk(s.m);
+        s.track = std::move(pts);
+        s.trackDirty = true;
+        s.renderDirty = true; // repaint even when the camera is idle
+    }
+    s.cv.notify_one();
 }
 
 bool marker_offset(double &nx, double &ny, double &aspect) {

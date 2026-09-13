@@ -8,6 +8,8 @@
 
 #include <cstdint>
 #include <functional>
+#include <utility>
+#include <vector>
 
 namespace mapgl {
 
@@ -35,6 +37,10 @@ void set_camera(double lat, double lon, double zoom);
 // Where the rider is. mbgl's Map belongs to the map thread, so the
 // lat/lon -> screen projection happens there, right after each render.
 void set_marker(double lat, double lon);
+
+// Live ride track: replace the yellow route line with these points
+// (lat/lon pairs, ride order). Empty clears the line.
+void set_track(std::vector<std::pair<double, double>> pts);
 
 // Latest projection of the marker: offsets from the frame centre as a
 // FRACTION of the frame's width/height, plus the frame's aspect ratio (the
