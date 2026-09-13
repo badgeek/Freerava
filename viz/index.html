@@ -863,9 +863,9 @@ function refreshTerrain(g) {
   g.cap.position.set(cx, bottom, cz);
   g.slab.add(g.cap);
 
-  // ---- white wireframe outline: the block's silhouette edges (top rim
-  // following the relief, the four verticals, and the base rectangle) drawn
-  // as crisp white lines so the specimen reads as a cut sample. ----
+  // ---- wireframe outline: the block's silhouette edges (top rim following
+  // the relief, the four verticals, and the base rectangle) drawn as crisp
+  // dark lines so the specimen reads as a cut sample. ----
   const ow = [];
   const push = (ax, ay, az, bx, by, bz) => ow.push(ax, ay, az, bx, by, bz);
   for (let k = 0; k < rim.length - 1; k++) {           // top rim
@@ -886,8 +886,8 @@ function refreshTerrain(g) {
   // so a plain line material can never be thicker than 1px.
   const og = new LineSegmentsGeometry();
   og.setPositions(ow);
-  const omat = new LineMaterial({ color: 0xffffff, linewidth: 3.5,
-    worldUnits: false, transparent: true, opacity: 0.95, fog: false });
+  const omat = new LineMaterial({ color: 0x11161c, linewidth: 3.5,
+    worldUnits: false, transparent: true, opacity: 0.92, fog: false });
   omat.resolution.set(innerWidth, innerHeight);
   g.outline = new LineSegments2(og, omat);
   g.outline.computeLineDistances();
@@ -942,7 +942,7 @@ function applyViewMode(m) {
   vis(g.skirt, solid);               // earth walls only with a solid/grid top
   vis(g.cap, solid);
   vis(g.shadow, solid);
-  vis(g.outline, solid);      // white edge wireframe on the block
+  vis(g.outline, solid);      // edge wireframe on the block
   vis(g.base, true);                 // grid stage under every mode
   vis(g.curtain, isTrack || isGrid || isHybrid); // elevation ribbon
   // Elevation/Progress: lift the grid to the ribbon's baseline (y=0); the
