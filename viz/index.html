@@ -875,8 +875,9 @@ async function refreshDetail() {
   if (dist > side * 0.62) { killDetail(g); return; }
 
   // Patch bbox: a square around the look-at point sized to the view, clamped
-  // inside the slab.
-  const r = Math.min(side / 2, Math.max(side * 0.08, dist * 0.75));
+  // inside the slab. Generous radius so a wide area sharpens, not just the
+  // spot under the cursor.
+  const r = Math.min(side / 2, Math.max(side * 0.28, dist * 1.6));
   const [clon, clat] = worldToLonLat(g, controls.target.x, controls.target.z);
   const { kx, kz } = g.proj;
   const dLon = r / kx, dLat = r / kz;
@@ -886,14 +887,32 @@ async function refreshDetail() {
 
   const token = ++detailToken;
   let crop;
-  try { crop = await rasterStitch(lonW, latS, lonE, latN, 2048, 40); }
+  try { crop = await rasterStitch(lonW, latS, lonE, latN, 6144, 200); }
   catch { return; }
   if (ride !== g || token !== detailToken) return;        // superseded
   if ((crop._zoom || 0) <= g.baseZoom) { killDetail(g); return; } // no gain
 
+  // Feather the patch edges to alpha 0 so the sharp overlay dissolves into
+  // the base texture instead of showing a hard mismatched rectangle.
+  const fw = crop.width, fh = crop.height, m = Math.round(Math.min(fw, fh) * 0.12);
+  const fx = crop.getContext('2d');
+  // Punch a soft alpha taper into each border band (centre stays opaque).
+  fx.globalCompositeOperation = 'destination-out';
+  const band = (x, y, w2, h2, gx0, gy0, gx1, gy1) => {
+    const gr = fx.createLinearGradient(gx0, gy0, gx1, gy1);
+    gr.addColorStop(0, 'rgba(0,0,0,1)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+    fx.fillStyle = gr; fx.fillRect(x, y, w2, h2);
+  };
+  band(0, 0, m, fh, 0, 0, m, 0);              // left
+  band(fw - m, 0, m, fh, fw, 0, fw - m, 0);   // right
+  band(0, 0, fw, m, 0, 0, 0, m);              // top
+  band(0, fh - m, fw, m, 0, fh, 0, fh - m);   // bottom
+  fx.globalCompositeOperation = 'source-over';
+
   const tex = new THREE.CanvasTexture(crop);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
 
   const { lat0, lon0, kx: KX, kz: KZ } = g.proj;
   const xW = (lonW - lon0) * KX, xE = (lonE - lon0) * KX;
@@ -911,7 +930,8 @@ async function refreshDetail() {
   geo.computeVertexNormals();
 
   killDetail(g);
-  const mat = new THREE.MeshBasicMaterial({ map: tex });
+  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true,
+    depthWrite: false }); // feathered edges blend into the base
   mat.polygonOffset = true;            // sit cleanly on top of the base terrain
   mat.polygonOffsetFactor = -1; mat.polygonOffsetUnits = -1;
   g.detail = new THREE.Mesh(geo, mat);
