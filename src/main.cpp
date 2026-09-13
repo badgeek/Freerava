@@ -4,9 +4,12 @@
 
 #include "cyclomp.h"
 
+#include "core/follow_camera.h"
 #include "core/format.h"
 #include "core/mock_telemetry.h"
 #include "core/ride_engine.h"
+
+#include <functional>
 
 #ifdef CYCLOMP_HAVE_MAPLIBRE
 #include "map_service.h"
@@ -130,28 +133,13 @@ int main(int, char **)
     if (const char *s = std::getenv("CYCLOMP_SCREEN"))
         ui->set_screen(std::atoi(s));
 
-    // ---- Map hook: camera follows the (mock) rider ----
-    struct MapHook {
+    // ---- Camera: core follow-mode decisions + a sink to the platform map ----
+    auto camera = std::make_shared<core::FollowCamera>(15.0);
+    std::function<void(const core::CameraUpdate &)> cam_sink =
+        [](const core::CameraUpdate &) {};
 #if defined(CYCLOMP_HAVE_MAPLIBRE) && !defined(CYCLOMP_MAP_GL)
-        std::unique_ptr<MapService> service;
+    std::shared_ptr<MapService> map_service;
 #endif
-        bool follow = true; // pan/pinch releases the camera; START re-locks
-        bool first = true;  // the first push also sets the initial zoom
-        double zoom = 15.0;
-        void push(double lat, double lon) {
-#if defined(CYCLOMP_MAP_GL)
-            if (!follow && !first) return;
-            mapgl::set_camera(lat, lon, first ? zoom : -1.0);
-            first = false;
-#elif defined(CYCLOMP_HAVE_MAPLIBRE)
-            if (service) service->set_camera(lat, lon, zoom);
-#else
-            (void)lat;
-            (void)lon;
-#endif
-        }
-    };
-    auto map_hook = std::make_shared<MapHook>();
 #if defined(CYCLOMP_MAP_GL)
     // B-lite: mbgl renders headless (own context) and GPU-blits into shared
     // AHardwareBuffers; the UI shows them as borrowed-GL-texture Images.
@@ -191,9 +179,11 @@ int main(int, char **)
                                 (int)*err);
         }
     }
-    map_hook->push(source->lat(), source->lon()); // initial camera
+    cam_sink = [](const core::CameraUpdate &up) {
+        mapgl::set_camera(up.lat, up.lon, up.zoom);
+    };
 #elif defined(CYCLOMP_HAVE_MAPLIBRE)
-    map_hook->service = std::make_unique<MapService>(
+    map_service = std::make_shared<MapService>(
         480, 720,
         [ui = slint::ComponentWeakHandle(ui)](uint32_t w, uint32_t h,
                                               std::vector<uint8_t> rgba) {
@@ -209,33 +199,40 @@ int main(int, char **)
                 });
         });
     ui->set_map_available(true);
-    map_hook->push(source->lat(), source->lon()); // initial frame
+    // Desktop CPU path: substitute the tracked zoom when the update says
+    // "keep current" (the service has no zoom<0 contract).
+    cam_sink = [map_service, camera](const core::CameraUpdate &up) {
+        map_service->set_camera(up.lat, up.lon,
+                                up.zoom < 0 ? camera->zoom() : up.zoom);
+    };
 #endif
-    ui->on_map_zoom([source, map_hook](int delta) {
+    // Initial camera placement (consumes FollowCamera's first-fire).
+    if (auto up = camera->on_position(source->lat(), source->lon()))
+        cam_sink(*up);
+
+    ui->on_map_zoom([=](int delta) {
 #if defined(CYCLOMP_MAP_GL)
-        (void)source;
         mapgl::zoom_step(delta);
 #elif defined(CYCLOMP_HAVE_MAPLIBRE)
-        map_hook->zoom = std::clamp(map_hook->zoom + delta, 3.0, 19.0);
-        if (map_hook->service)
-            map_hook->service->set_camera(source->lat(), source->lon(),
-                                          map_hook->zoom);
+        if (map_service)
+            map_service->set_camera(source->lat(), source->lon(),
+                                    camera->adjust_zoom(delta));
 #else
         (void)delta;
 #endif
     });
 #if defined(CYCLOMP_MAP_GL)
-    ui->on_map_pan([map_hook](float dx, float dy) {
-        map_hook->follow = false;
+    ui->on_map_pan([camera](float dx, float dy) {
+        camera->release();
         mapgl::drag_by(dx, dy);
     });
     {
         // Slint reports a cumulative pinch scale; mbgl wants increments.
         auto last = std::make_shared<double>(1.0);
         ui->on_map_pinch_begin([last] { *last = 1.0; });
-        ui->on_map_pinch([map_hook, last](float s, float cx, float cy) {
+        ui->on_map_pinch([camera, last](float s, float cx, float cy) {
             if (s <= 0 || *last <= 0) return;
-            map_hook->follow = false;
+            camera->release();
             mapgl::scale_by(s / *last, cx, cy);
             *last = s;
         });
@@ -245,14 +242,14 @@ int main(int, char **)
     // idle -> start (fresh session) | running -> pause | paused -> resume.
     // The engine owns the state machine; the UI property just mirrors it.
     ui->on_toggle_ride(
-        [ui = slint::ComponentWeakHandle(ui), source, engine, map_hook] {
+        [ui = slint::ComponentWeakHandle(ui), source, engine, camera] {
             auto u = ui.lock();
             if (!u) return;
             auto &w = **u;
             if (engine->state() == core::RideState::Idle) {
                 source->reset_ride();
                 publish_idle(w);
-                map_hook->follow = true; // re-lock the camera onto the rider
+                camera->relock(); // camera back onto the rider
             }
             w.set_ride_state((int)engine->toggle());
         });
@@ -276,7 +273,8 @@ int main(int, char **)
     // ~500 ms telemetry tick; only advances while RUNNING (pause freezes all).
     static slint::Timer timer;
     timer.start(slint::TimerMode::Repeated, std::chrono::milliseconds(500),
-        [ui = slint::ComponentWeakHandle(ui), source, engine, map_hook] {
+        [ui = slint::ComponentWeakHandle(ui), source, engine, camera,
+         cam_sink] {
             auto u = ui.lock();
             if (!u) return;
             auto &w = **u;
@@ -284,7 +282,7 @@ int main(int, char **)
             auto s = source->sample(0.5);
             engine->tick(0.5, s);
             publish_live(w, engine->live(), source->nav_m());
-            map_hook->push(s.lat, s.lon);
+            if (auto up = camera->on_position(s.lat, s.lon)) cam_sink(*up);
         });
 
 #if defined(CYCLOMP_MAP_GL)

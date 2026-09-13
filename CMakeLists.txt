@@ -158,7 +158,8 @@ if(NOT ANDROID)
             tests/main.cpp
             tests/test_format.cpp
             tests/test_ride_engine.cpp
-            tests/test_mock_telemetry.cpp)
+            tests/test_mock_telemetry.cpp
+            tests/test_follow_camera.cpp)
         target_link_libraries(cyclomp_tests PRIVATE cyclomp_core doctest::doctest)
         add_test(NAME cyclomp_tests COMMAND cyclomp_tests)
     endif()
