@@ -4,6 +4,21 @@ project(cyclomp LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+option(CYCLOMP_BUILD_APP "Build the Slint app target" ON)
+
+# ---- Platform-free core: ride logic, formatting (no Slint/mbgl/Android) ----
+# Unit-tested below; the OFF app lane proves it never touches Slint.
+add_library(cyclomp_core STATIC
+    src/core/format.cpp
+    src/core/mock_telemetry.cpp
+    src/core/ride_engine.cpp)
+target_include_directories(cyclomp_core PUBLIC src)
+target_compile_features(cyclomp_core PUBLIC cxx_std_20)
+# Linked into the Android shared lib.
+set_target_properties(cyclomp_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+if(CYCLOMP_BUILD_APP)
+
 find_package(Slint QUIET)
 if (NOT Slint_FOUND)
   message("Slint not found in CMake search path — fetching and building from Git.")
@@ -26,7 +41,7 @@ else()
     add_executable(cyclomp src/main.cpp)
 endif()
 
-target_link_libraries(cyclomp PRIVATE Slint::Slint)
+target_link_libraries(cyclomp PRIVATE cyclomp_core Slint::Slint)
 slint_target_sources(cyclomp ui/cyclomp.slint)
 
 # ---- Optional MapLibre map (mbgl core embedded, no Java SDK) ----
@@ -43,6 +58,11 @@ option(CYCLOMP_MAP_VERBOSE "Verbose MapLibre logging" OFF)
 if(CYCLOMP_MAP_VERBOSE)
     target_compile_definitions(cyclomp PRIVATE CYCLOMP_MAP_VERBOSE)
 endif()
+
+# Zero-readback GPU map on Android: mbgl renders headless, the frame is
+# GPU-blitted into AHardwareBuffers and shown as a borrowed GL texture.
+# OFF falls back to the CPU-copy path (glReadPixels), as used on desktop.
+option(CYCLOMP_MAP_GL "GPU (AHardwareBuffer) map path on Android" ON)
 set(_mln_vendor_includes
     ${CYCLOMP_MLN_DIR}/vendor/expected-lite/include
     ${CYCLOMP_MLN_DIR}/vendor/maplibre-native-base/include
@@ -88,6 +108,12 @@ if(ANDROID)
     target_link_libraries(cyclomp PRIVATE log android)
     if(EXISTS "${_mln_build_android}/libmbgl-core.a")
         message(STATUS "cyclomp: MapLibre map enabled for Android (${_mln_build_android})")
+        if(CYCLOMP_MAP_GL)
+            # B-lite: no mbgl subclassing at all (HeadlessFrontend + AHB blit),
+            # so no -fno-rtti gymnastics either.
+            target_sources(cyclomp PRIVATE src/map_gl.cpp)
+            target_compile_definitions(cyclomp PRIVATE CYCLOMP_MAP_GL)
+        endif()
         target_sources(cyclomp PRIVATE
             src/map_service.cpp
             src/http_file_source_android.cpp
@@ -121,4 +147,29 @@ if (WIN32)
     add_custom_command(TARGET cyclomp POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_RUNTIME_DLLS:cyclomp> $<TARGET_FILE_DIR:cyclomp>
         COMMAND_EXPAND_LISTS)
+endif()
+
+endif() # CYCLOMP_BUILD_APP
+
+# ---- Unit tests (desktop only; the gradle/Android configure never sees this) ----
+if(NOT ANDROID)
+    option(CYCLOMP_BUILD_TESTS "Build unit tests" ON)
+    if(CYCLOMP_BUILD_TESTS)
+        include(CTest)
+        include(FetchContent)
+        FetchContent_Declare(
+            doctest
+            GIT_REPOSITORY https://github.com/doctest/doctest.git
+            GIT_TAG v2.4.12
+        )
+        FetchContent_MakeAvailable(doctest)
+        add_executable(cyclomp_tests
+            tests/main.cpp
+            tests/test_format.cpp
+            tests/test_ride_engine.cpp
+            tests/test_mock_telemetry.cpp
+            tests/test_follow_camera.cpp)
+        target_link_libraries(cyclomp_tests PRIVATE cyclomp_core doctest::doctest)
+        add_test(NAME cyclomp_tests COMMAND cyclomp_tests)
+    endif()
 endif()
