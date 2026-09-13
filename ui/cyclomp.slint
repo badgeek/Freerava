@@ -185,6 +185,9 @@ export component AppWindow inherits Window {
     callback toggle-ride();  // idle->start, running->pause, paused->resume
     callback stop-ride();    // finalize + save session
     callback map-zoom(int);  // +1 / -1 zoom step
+    callback map-pan(float, float);          // one-finger drag delta (px)
+    callback map-pinch-begin();
+    callback map-pinch(float, float, float); // cumulative scale, center x, y
 
     property <color> hr-color: root.hr-zone >= 4 ? Palette.red
                              : root.hr-zone == 3 ? Palette.yellow
@@ -328,6 +331,34 @@ export component AppWindow inherits Window {
                 height: 100%;
                 source: root.map-frame;
                 image-fit: cover;
+            }
+
+            // Gestures: one-finger pan, two-finger pinch zoom, double-tap
+            // zoom-in. The zoom buttons are declared later, so they stay on
+            // top and remain clickable.
+            if root.map-available : ScaleRotateGestureHandler {
+                started => { root.map-pinch-begin(); }
+                updated => {
+                    root.map-pinch(self.scale,
+                                   self.center.x / 1px, self.center.y / 1px);
+                }
+                TouchArea {
+                    property <length> last-x;
+                    property <length> last-y;
+                    pointer-event(ev) => {
+                        if (ev.kind == PointerEventKind.down) {
+                            last-x = self.mouse-x;
+                            last-y = self.mouse-y;
+                        }
+                    }
+                    moved => {
+                        root.map-pan((self.mouse-x - last-x) / 1px,
+                                     (self.mouse-y - last-y) / 1px);
+                        last-x = self.mouse-x;
+                        last-y = self.mouse-y;
+                    }
+                    double-clicked => { root.map-zoom(1); }
+                }
             }
 
             // Placeholder until the platform has a map renderer.

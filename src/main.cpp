@@ -7,6 +7,10 @@
 #ifdef CYCLOMP_HAVE_MAPLIBRE
 #include "map_service.h"
 #endif
+#ifdef CYCLOMP_MAP_GL
+#include "map_gl.h"
+#include <android/log.h>
+#endif
 
 #include <algorithm>
 #include <cctype>
@@ -220,12 +224,18 @@ int main(int, char **)
 
     // ---- Map hook: camera follows the (mock) rider ----
     struct MapHook {
-#ifdef CYCLOMP_HAVE_MAPLIBRE
+#if defined(CYCLOMP_HAVE_MAPLIBRE) && !defined(CYCLOMP_MAP_GL)
         std::unique_ptr<MapService> service;
 #endif
+        bool follow = true; // pan/pinch releases the camera; START re-locks
+        bool first = true;  // the first push also sets the initial zoom
         double zoom = 15.0;
         void push(const RideModel &m) {
-#ifdef CYCLOMP_HAVE_MAPLIBRE
+#if defined(CYCLOMP_MAP_GL)
+            if (!follow && !first) return;
+            mapgl::set_camera(m.lat, m.lon, first ? zoom : -1.0);
+            first = false;
+#elif defined(CYCLOMP_HAVE_MAPLIBRE)
             if (service) service->set_camera(m.lat, m.lon, zoom);
 #else
             (void)m;
@@ -233,7 +243,47 @@ int main(int, char **)
         }
     };
     auto map_hook = std::make_shared<MapHook>();
-#ifdef CYCLOMP_HAVE_MAPLIBRE
+#if defined(CYCLOMP_MAP_GL)
+    // B-lite: mbgl renders headless (own context) and GPU-blits into shared
+    // AHardwareBuffers; the UI shows them as borrowed-GL-texture Images.
+    // Frames arrive on the map thread — hop to the UI thread first.
+    mapgl::set_frame_sink([ui = slint::ComponentWeakHandle(ui)](
+                              uint32_t idx, uint32_t w, uint32_t h) {
+        slint::invoke_from_event_loop([ui, idx, w, h] {
+            auto u = ui.lock();
+            if (!u) return;
+            uint32_t tex = mapgl::ui_texture(idx);
+            if (tex == 0) {
+                // Buffers not imported into Slint's context yet: a redraw
+                // runs the notifier (which imports), and a poke re-renders
+                // the dropped frame afterwards.
+                (*u)->window().request_redraw();
+                mapgl::poke();
+                return;
+            }
+            (*u)->set_map_frame(slint::Image::create_from_borrowed_gl_2d_rgba_texture(
+                tex, slint::Size<uint32_t>{w, h},
+                slint::Image::BorrowedOpenGLTextureOrigin::BottomLeft));
+        });
+    });
+    {
+        // The notifier's only job: import the shared buffers into Slint's GL
+        // context once they exist.
+        auto err = ui->window().set_rendering_notifier(
+            [](slint::RenderingState st, slint::GraphicsAPI) {
+                if (st != slint::RenderingState::BeforeRendering) return;
+                mapgl::ui_import_all();
+            });
+        if (!err) {
+            ui->set_map_available(true);
+        } else {
+            __android_log_print(ANDROID_LOG_ERROR, "cyclomp-mapgl",
+                                "set_rendering_notifier unsupported (err=%d)",
+                                (int)*err);
+        }
+    }
+    map_hook->push(*model); // initial camera
+#elif defined(CYCLOMP_HAVE_MAPLIBRE)
     map_hook->service = std::make_unique<MapService>(
         480, 720,
         [ui = slint::ComponentWeakHandle(ui)](uint32_t w, uint32_t h,
@@ -253,15 +303,36 @@ int main(int, char **)
     map_hook->push(*model); // initial frame
 #endif
     ui->on_map_zoom([model, map_hook](int delta) {
+#if defined(CYCLOMP_MAP_GL)
+        mapgl::zoom_step(delta);
+#elif defined(CYCLOMP_HAVE_MAPLIBRE)
         map_hook->zoom = std::clamp(map_hook->zoom + delta, 3.0, 19.0);
-#ifdef CYCLOMP_HAVE_MAPLIBRE
         if (map_hook->service)
             map_hook->service->set_camera(model->lat, model->lon, map_hook->zoom);
+#else
+        (void)delta;
 #endif
     });
+#if defined(CYCLOMP_MAP_GL)
+    ui->on_map_pan([map_hook](float dx, float dy) {
+        map_hook->follow = false;
+        mapgl::drag_by(dx, dy);
+    });
+    {
+        // Slint reports a cumulative pinch scale; mbgl wants increments.
+        auto last = std::make_shared<double>(1.0);
+        ui->on_map_pinch_begin([last] { *last = 1.0; });
+        ui->on_map_pinch([map_hook, last](float s, float cx, float cy) {
+            if (s <= 0 || *last <= 0) return;
+            map_hook->follow = false;
+            mapgl::scale_by(s / *last, cx, cy);
+            *last = s;
+        });
+    }
+#endif
 
     // idle -> start (fresh session) | running -> pause | paused -> resume
-    ui->on_toggle_ride([ui = slint::ComponentWeakHandle(ui), model] {
+    ui->on_toggle_ride([ui = slint::ComponentWeakHandle(ui), model, map_hook] {
         auto u = ui.lock();
         if (!u) return;
         auto &w = **u;
@@ -269,6 +340,7 @@ int main(int, char **)
         case Idle:
             model->reset();
             publish_idle(w);
+            map_hook->follow = true; // re-lock the camera onto the rider
             w.set_ride_state(Running);
             break;
         case Running:
@@ -316,6 +388,22 @@ int main(int, char **)
             publish_live(w, *model);
             map_hook->push(*model);
         });
+
+#if defined(CYCLOMP_MAP_GL)
+    // Start the map service once the window has a real size (no GL needed).
+    static slint::Timer map_start_timer;
+    map_start_timer.start(
+        slint::TimerMode::Repeated, std::chrono::milliseconds(200),
+        [ui = slint::ComponentWeakHandle(ui)] {
+            auto u = ui.lock();
+            if (!u) return;
+            auto sz = (*u)->window().size();
+            if (sz.width > 0 && sz.height > 0) {
+                mapgl::setup(sz.width, sz.height, 2.75f);
+                map_start_timer.stop();
+            }
+        });
+#endif
 
     ui->run();
 #ifndef __ANDROID__

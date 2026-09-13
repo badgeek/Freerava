@@ -32,8 +32,13 @@ slint_target_sources(cyclomp ui/cyclomp.slint)
 # ---- Optional MapLibre map (mbgl core embedded, no Java SDK) ----
 # Expects a maplibre-native checkout with prebuilt cores:
 #   build-macos-metal/  (desktop)   build-android/  (arm64-v8a)
-set(CYCLOMP_MLN_DIR "/tmp/maplibre-native" CACHE PATH
+set(CYCLOMP_MLN_DIR "/Users/manticore/work/bauhouse/deps/maplibre-native" CACHE PATH
     "maplibre-native checkout containing prebuilt core libraries")
+
+# Zero-readback GPU map on Android: mbgl renders headless, the frame is
+# GPU-blitted into AHardwareBuffers and shown as a borrowed GL texture.
+# OFF falls back to the CPU-copy path (glReadPixels), as used on desktop.
+option(CYCLOMP_MAP_GL "GPU (AHardwareBuffer) map path on Android" ON)
 set(_mln_vendor_includes
     ${CYCLOMP_MLN_DIR}/vendor/expected-lite/include
     ${CYCLOMP_MLN_DIR}/vendor/maplibre-native-base/include
@@ -79,6 +84,12 @@ if(ANDROID)
     target_link_libraries(cyclomp PRIVATE log android)
     if(EXISTS "${_mln_build_android}/libmbgl-core.a")
         message(STATUS "cyclomp: MapLibre map enabled for Android (${_mln_build_android})")
+        if(CYCLOMP_MAP_GL)
+            # B-lite: no mbgl subclassing at all (HeadlessFrontend + AHB blit),
+            # so no -fno-rtti gymnastics either.
+            target_sources(cyclomp PRIVATE src/map_gl.cpp)
+            target_compile_definitions(cyclomp PRIVATE CYCLOMP_MAP_GL)
+        endif()
         target_sources(cyclomp PRIVATE
             src/map_service.cpp
             src/http_file_source_android.cpp
