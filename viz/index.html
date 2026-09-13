@@ -92,7 +92,7 @@
 </div>
 
 <div id="viewmodes" style="display:none"
-  class="fixed top-[74px] left-6 z-[3] flex items-center bg-card border border-bd rounded-full shadow-card p-[3px] gap-[2px]">
+  class="fixed top-[70px] left-1/2 -translate-x-1/2 z-[3] flex items-center bg-card border border-bd rounded-full shadow-card p-[3px] gap-[2px]">
   <button data-mode="map" class="on text-xs font-semibold text-muted rounded-full px-[13px] py-[6px] leading-none whitespace-nowrap transition hover:text-ink">Map</button>
   <button data-mode="hybrid" class="text-xs font-semibold text-muted rounded-full px-[13px] py-[6px] leading-none whitespace-nowrap transition hover:text-ink">Map&nbsp;+&nbsp;Elev</button>
   <button data-mode="grid" class="text-xs font-semibold text-muted rounded-full px-[13px] py-[6px] leading-none whitespace-nowrap transition hover:text-ink">Grid</button>
@@ -437,19 +437,26 @@ const ROUTE_LIFT = 2; // metres above the slab top, so the line never z-fights
 
 function rebuildGeometry() {
   const g = ride; if (!g) return;
-  // Ribbon views lift the route by its OWN altitude profile so the curtain
-  // reads as an elevation ribbon: Elevation/Progress over the bare grid, and
-  // "hybrid" over the flat map specimen. Map/Grid drape it on the terrain
-  // relief instead (GPS noise would otherwise float/sink the line).
-  const ribbon = viewMode === 'template' || viewMode === 'progress'
-              || viewMode === 'hybrid';
+  // How the route is lifted:
+  //  overGrid (Elevation/Progress): altitude ribbon over the bare grid,
+  //    curtain to a flat y=0 baseline.
+  //  overMap (Map+Elev): the same altitude ribbon but riding HIGH above the
+  //    real terrain surface, curtain dropping back down to the terrain.
+  //  else (Map/Grid): draped on the terrain relief.
+  const overGrid = viewMode === 'template' || viewMode === 'progress';
+  const overMap = viewMode === 'hybrid';
+  const HYBRID_RIBBON = 2.4; // extra altitude gain for the floating ribbon
+  const surfaceOf = p => (g.demSample ? g.demSample(p.x, p.z) * exagT() : 0);
   const pts = g.P.map(p => {
-    const y = ribbon ? p.y * exag + 8
-            : g.demSample ? g.demSample(p.x, p.z) * exagT() : p.y * exag;
+    let y;
+    if (overMap) y = surfaceOf(p) + p.y * exag * HYBRID_RIBBON + 16;
+    else if (overGrid) y = p.y * exag + 8;
+    else y = surfaceOf(p);
     return new THREE.Vector3(p.x, y + ROUTE_LIFT, p.z);
   });
   g.drawn = pts;
-  g.trackMode = ribbon;
+  g.trackMode = overGrid || overMap; // curtain shown + reframing
+  g.curtainToBaseline = overGrid;    // grid ribbon drops to 0; hybrid to terrain
 
   // Route line, per-vertex speed colour.
   const pos = new Float32Array(pts.length * 3);
@@ -477,9 +484,9 @@ function rebuildGeometry() {
   const cCol = new Float32Array(n * 2 * 3);
   for (let i = 0; i < n; i++) {
     const p = pts[i];
-    // Track views drop the curtain to a flat baseline (full elevation ribbon);
-    // map/grid drop it to the terrain surface just under the line.
-    const by = g.trackMode ? 0
+    // Grid ribbon drops to a flat baseline; hybrid + draped views drop the
+    // curtain to the terrain surface just under the line.
+    const by = g.curtainToBaseline ? 0
              : g.demSample ? g.demSample(p.x, p.z) * exagT() : 0;
     cPos.set([p.x, p.y, p.z, p.x, by, p.z], i * 6);
     speedColor(g.vNorm[i], tmp);
@@ -759,9 +766,7 @@ function refreshTerrain(g) {
 
   const { xW, xE, zN, zS, w, d, thick } = g.slabX;
   const cx = (xW + xE) / 2, cz = (zN + zS) / 2;
-  // "hybrid" wants a FLAT map slab (the route alone carries the elevation);
-  // every other DEM-backed mode reliefs the surface.
-  const relief = g.demSample && viewMode !== 'hybrid';
+  const relief = !!g.demSample; // full terrain relief in map/grid/hybrid
   const sample = relief ? g.demSample : (() => 0);
   const ex = exagT();
   const N = relief ? 96 : 2; // flat slab needs just the four corners
