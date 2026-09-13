@@ -36,10 +36,6 @@
   #app { position: fixed; inset: 0; }
   canvas { display: block; }
 
-  /* ---- Live terrain map mode (MapLibre) ---- */
-  #map { position: fixed; inset: 0; display: none; z-index: 1; }
-  #map .maplibregl-ctrl-bottom-right { bottom: 84px; }
-
   /* ---- Header: brand + ride title + stat row ---- */
   header { position: fixed; top: 0; left: 0; right: 0; background: var(--card);
     border-bottom: 1px solid var(--border); z-index: 3; }
@@ -125,7 +121,6 @@
 </head>
 <body>
 <div id="app"></div>
-<div id="map"></div>
 
 <header style="display:none" id="header">
   <div class="head-inner">
@@ -159,7 +154,6 @@
   <input id="scrub" type="range" min="0" max="1000" value="1000" />
   <span id="clock">0:00</span>
   <button id="follow" class="pill">Chase cam</button>
-  <button id="viewtoggle" class="pill">Terrain map</button>
   <span class="ctl" id="reliefctl">Relief <input id="exag" type="range" min="0" max="40" value="12" /></span>
 </div>
 
@@ -222,9 +216,11 @@ grid.material.transparent = true; grid.material.opacity = 0.9;
 scene.add(grid);
 
 // Soft light rig — only the Lambert meshes (terrain, flags, bike) react;
-// the unlit route/curtain/slab-side materials ignore it.
-scene.add(new THREE.AmbientLight(0xffffff, 0.85));
-const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+// the unlit route/curtain/slab-side materials ignore it. Ambient + sun sum
+// to ~1.0 on flat ground so the draped map keeps its true colours (higher
+// totals clip the texture toward white and wash the roads out).
+scene.add(new THREE.AmbientLight(0xffffff, 0.62));
+const sun = new THREE.DirectionalLight(0xffffff, 0.42);
 sun.position.set(300, 600, 200);
 scene.add(sun);
 
@@ -245,8 +241,6 @@ function clearRide() {
     disposeObj(o);
   grid.visible = true;
   document.getElementById('attrib').style.display = 'none';
-  if (liveMap) { try { liveMap.remove(); } catch {} liveMap = null; }
-  if (mapMode) setMapMode(false);
   ride = null;
 }
 
@@ -477,7 +471,7 @@ function loadMapLibre() {
 async function renderVectorMap(lonW, latS, lonE, latN) {
   await loadMapLibre();
   const aspect = (mercX(lonE) - mercX(lonW)) / (mercY(latS) - mercY(latN));
-  const base = 1024;
+  const base = 1536;
   const w = aspect >= 1 ? base : Math.max(256, Math.round(base * aspect));
   const h = aspect >= 1 ? Math.max(256, Math.round(base / aspect)) : base;
   const div = document.createElement('div');
@@ -486,7 +480,9 @@ async function renderVectorMap(lonW, latS, lonE, latN) {
   return new Promise((res, rej) => {
     const m = new maplibregl.Map({
       container: div,
-      style: 'https://tiles.openfreemap.org/styles/positron',
+      // "liberty": coloured roads with proper casings — reads clearly on the
+      // slab where the near-white "positron" style washed out.
+      style: 'https://tiles.openfreemap.org/styles/liberty',
       interactive: false, attributionControl: false,
       preserveDrawingBuffer: true, fadeDuration: 0, pixelRatio: 2,
     });
@@ -499,7 +495,10 @@ async function renderVectorMap(lonW, latS, lonE, latN) {
           const src = m.getCanvas();
           const c = document.createElement('canvas');
           c.width = src.width; c.height = src.height;
-          c.getContext('2d').drawImage(src, 0, 0);
+          const ctx = c.getContext('2d');
+          // A touch of pop so the draped texture stays legible at an angle.
+          ctx.filter = 'saturate(1.15) contrast(1.05)';
+          ctx.drawImage(src, 0, 0);
           cleanup(); res(c);
         } catch (e) { cleanup(); rej(e); }
       });
@@ -747,124 +746,6 @@ function frameCamera() {
   camera.near = d / 200; camera.far = d * 40; camera.updateProjectionMatrix();
 }
 
-// ---- Live terrain map mode: an interactive MapLibre map with real 3D
-// terrain (hillshade + raster-dem + sky), the ride as a speed-gradient line.
-// DEM: AWS/Mapzen terrarium tiles — global coverage, free, no API key.
-let mapMode = false, liveMap = null;
-const DEM = {
-  type: 'raster-dem', encoding: 'terrarium', tileSize: 256, maxzoom: 15,
-  tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
-  attribution: 'Terrain &copy; Mapzen/AWS Open Data',
-};
-
-// SVG markers for the live map: flags for start/finish, a bike for the head.
-const FLAG_SVG = fill => `<svg viewBox="0 0 24 24" width="100%" height="100%">
-  <path d="M5 21V4" stroke="#444" stroke-width="2" stroke-linecap="round"/>
-  <path d="M6 4h11l-2.8 4L17 12H6z" fill="${fill}"/></svg>`;
-const CHECK_SVG = `<svg viewBox="0 0 24 24" width="100%" height="100%">
-  <path d="M5 21V4" stroke="#444" stroke-width="2" stroke-linecap="round"/>
-  <rect x="6" y="4" width="11" height="8" fill="#fff" stroke="#111" stroke-width=".6"/>
-  <rect x="6" y="4" width="2.75" height="2.67" fill="#111"/><rect x="11.5" y="4" width="2.75" height="2.67" fill="#111"/>
-  <rect x="8.75" y="6.67" width="2.75" height="2.67" fill="#111"/><rect x="14.25" y="6.67" width="2.75" height="2.67" fill="#111"/>
-  <rect x="6" y="9.33" width="2.75" height="2.67" fill="#111"/><rect x="11.5" y="9.33" width="2.75" height="2.67" fill="#111"/></svg>`;
-const BIKE_SVG = `<svg viewBox="0 0 24 24" width="100%" height="100%">
-  <circle cx="12" cy="12" r="11.4" fill="#fff"/>
-  <path fill="#fc5200" transform="translate(3.6,3.6) scale(0.7)" d="M15.5 5.5c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zM5 12c-2.8 0-5 2.2-5 5s2.2 5 5 5 5-2.2 5-5-2.2-5-5-5zm0 8.5c-1.9 0-3.5-1.6-3.5-3.5S3.1 13.5 5 13.5 8.5 15.1 8.5 17 6.9 20.5 5 20.5zm5.8-10 2.4-2.4.8.8c1.3 1.3 3 2.1 5.1 2.1V9c-1.5 0-2.7-.6-3.6-1.5l-1.9-1.9c-.5-.4-1-.6-1.6-.6s-1.1.2-1.4.6L7.8 8.4c-.4.4-.6.9-.6 1.4 0 .6.2 1.1.6 1.4L11 14v5h2v-6.2l-2.2-2.3zM19 12c-2.8 0-5 2.2-5 5s2.2 5 5 5 5-2.2 5-5-2.2-5-5-5zm0 8.5c-1.9 0-3.5-1.6-3.5-3.5s1.6-3.5 3.5-3.5 3.5 1.6 3.5 3.5-1.6 3.5-3.5 3.5z"/></svg>`;
-function iconMarker(svg, size, anchor) {
-  const d = document.createElement('div');
-  d.style.cssText = `width:${size}px;height:${size}px;` +
-    `filter:drop-shadow(0 1px 2px rgba(0,0,0,.35));`;
-  d.innerHTML = svg;
-  return new maplibregl.Marker({ element: d, anchor });
-}
-
-// line-progress -> colour, sampled along cumulative distance (<= ~48 stops).
-function gradientStops(g) {
-  const expr = ['interpolate', ['linear'], ['line-progress']];
-  const n = g.P.length, step = Math.max(1, Math.ceil(n / 48));
-  const total = Math.max(1e-6, g.cumD[n - 1]);
-  const tmp = new THREE.Color();
-  let lastF = -1;
-  for (let i = 0; i < n; i += step) {
-    let f = g.cumD[i] / total;
-    if (f <= lastF) f = lastF + 1e-4;
-    if (f >= 1) break;
-    lastF = f;
-    speedColor(g.vNorm[i], tmp);
-    expr.push(f, '#' + tmp.getHexString());
-  }
-  speedColor(g.vNorm[n - 1], tmp);
-  expr.push(1, '#' + tmp.getHexString());
-  return expr;
-}
-
-function ensureLiveMap() {
-  if (liveMap || !ride) return;
-  const g = ride;
-  liveMap = new maplibregl.Map({
-    container: 'map',
-    style: {
-      version: 8,
-      sources: {
-        osm: { type: 'raster', tileSize: 256, maxzoom: 19,
-               tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-               attribution: '&copy; OpenStreetMap contributors' },
-        terrainSource: DEM,
-        hillshadeSource: DEM,
-      },
-      layers: [
-        { id: 'osm', type: 'raster', source: 'osm' },
-        { id: 'hills', type: 'hillshade', source: 'hillshadeSource',
-          layout: { visibility: 'visible' },
-          paint: { 'hillshade-shadow-color': '#473B24' } },
-      ],
-      terrain: { source: 'terrainSource', exaggeration: 1 },
-      sky: {},
-    },
-    maxZoom: 18,
-    maxPitch: 85,
-    center: [g.coords[0][0], g.coords[0][1]], // near the ride from frame one
-    zoom: 13,
-  });
-  liveMap.addControl(new maplibregl.NavigationControl({
-    visualizePitch: true, showZoom: true, showCompass: true }), 'bottom-right');
-  liveMap.addControl(new maplibregl.TerrainControl({
-    source: 'terrainSource', exaggeration: 1 }), 'bottom-right');
-
-  liveMap.on('load', () => {
-    const line = g.coords.map(c => [c[0], c[1]]);
-    liveMap.addSource('route', { type: 'geojson', lineMetrics: true,
-      data: { type: 'Feature', geometry: { type: 'LineString', coordinates: line } } });
-    liveMap.addLayer({ id: 'route-casing', type: 'line', source: 'route',
-      layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': '#ffffff', 'line-width': 8, 'line-opacity': 0.9 } });
-    liveMap.addLayer({ id: 'route', type: 'line', source: 'route',
-      layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-width': 4.5, 'line-gradient': gradientStops(g) } });
-    g.mapStart = iconMarker(FLAG_SVG('#16a34a'), 30, 'bottom').setLngLat(line[0]).addTo(liveMap);
-    g.mapEnd = iconMarker(CHECK_SVG, 30, 'bottom').setLngLat(line[line.length - 1]).addTo(liveMap);
-    g.mapHead = iconMarker(BIKE_SVG, 26, 'center').setLngLat(line[0]).addTo(liveMap);
-    const b = new maplibregl.LngLatBounds();
-    for (const c of line) b.extend(c);
-    // fitBounds' zoom math assumes pitch 0 — fit flat first, tilt after.
-    try { liveMap.fitBounds(b, { padding: 90, duration: 0 }); } catch {}
-    liveMap.easeTo({ pitch: 60, duration: 800 });
-    setProgress(headT);
-  });
-}
-
-function setMapMode(on) {
-  mapMode = on;
-  const btn = document.getElementById('viewtoggle');
-  btn.classList.toggle('on', on);
-  btn.textContent = on ? 'Model view' : 'Terrain map';
-  document.getElementById('map').style.display = on ? 'block' : 'none';
-  document.getElementById('reliefctl').style.display = on ? 'none' : 'flex';
-  document.getElementById('hint').style.display = (!on && ride) ? 'block' : 'none';
-  document.getElementById('attrib').style.display =
-    (!on && ride?.slab) ? 'block' : 'none'; // the live map shows its own
-}
-
 // Reveal + head position, driven by time fraction 0..1.
 function setProgress(frac) {
   const g = ride; if (!g) return;
@@ -890,26 +771,10 @@ function setProgress(frac) {
   if (Math.abs(dxw) + Math.abs(dzw) > 1e-6)
     g.head.rotation.y = Math.atan2(-dzw, dxw);
 
-  if (follow && !mapMode) {
+  if (follow) {
     const off = new THREE.Vector3(80, 120, 140);
     controls.target.lerp(hp, 0.12);
     camera.position.lerp(hp.clone().add(off), 0.08);
-  }
-
-  // Terrain-map mode: move the head marker; chase = fly the map camera along
-  // the course with a tilted view.
-  if (mapMode && liveMap && g.mapHead) {
-    const ca = g.coords[i - 1], cb = g.coords[Math.min(i, g.coords.length - 1)];
-    const lon = ca[0] + f * (cb[0] - ca[0]), lat = ca[1] + f * (cb[1] - ca[1]);
-    g.mapHead.setLngLat([lon, lat]);
-    if (follow) {
-      const dx = (cb[0] - ca[0]) * Math.cos(lat * Math.PI / 180);
-      const dy = cb[1] - ca[1];
-      const opts = { center: [lon, lat], pitch: 65 };
-      if (Math.abs(dx) + Math.abs(dy) > 1e-9)
-        opts.bearing = Math.atan2(dx, dy) * 180 / Math.PI;
-      liveMap.jumpTo(opts);
-    }
   }
 }
 
@@ -986,17 +851,6 @@ document.getElementById('follow').addEventListener('click', e => {
   follow = !follow; e.target.classList.toggle('on', follow);
   if (!follow && ride) frameCamera();
 });
-document.getElementById('viewtoggle').addEventListener('click', async () => {
-  if (!ride) return;
-  if (!mapMode) {
-    try { await loadMapLibre(); } catch { return; } // offline: stay in model view
-    setMapMode(true);
-    ensureLiveMap();
-    liveMap?.resize();
-  } else {
-    setMapMode(false);
-  }
-});
 document.getElementById('exag').addEventListener('input', e => {
   exag = Number(e.target.value);
   if (ride) { rebuildGeometry(); if (ride.demSample) refreshTerrain(ride); }
@@ -1013,10 +867,8 @@ function animate(now) {
     if (headT >= 1) { headT = 1; playing = false; setPlayIcon(); }
     setProgress(headT);
   }
-  if (!mapMode) { // the live map renders itself; don't burn GPU behind it
-    controls.update();
-    renderer.render(scene, camera);
-  }
+  controls.update();
+  renderer.render(scene, camera);
 }
 requestAnimationFrame(animate);
 
