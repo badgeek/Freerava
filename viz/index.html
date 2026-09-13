@@ -42,22 +42,40 @@
     background: radial-gradient(ellipse 75% 65% at 50% 42%,
       rgba(0,0,0,0) 55%, rgba(28,32,44,.055) 78%, rgba(28,32,44,.13) 100%); }
 
-  /* ---- Header: brand + ride title + stat row ---- */
-  header { position: fixed; top: 0; left: 0; right: 0; background: var(--card);
-    border-bottom: 1px solid var(--border); z-index: 3; }
-  .head-inner { max-width: 1080px; margin: 0 auto; padding: 14px 24px 0; }
-  .brand { display: flex; align-items: baseline; gap: 10px; }
-  .brand .mark { width: 14px; height: 14px; border-radius: 3px;
-    background: var(--accent); align-self: center; }
-  .brand h1 { font-size: 17px; font-weight: 700; margin: 0; letter-spacing: -.01em; }
-  .brand .date { color: var(--muted); font-size: 13px; }
-  #stats { display: flex; flex-wrap: wrap; gap: 0 36px; padding: 10px 0 14px; }
-  .stat { min-width: 88px; }
-  .stat .v { font-size: 26px; font-weight: 600; letter-spacing: -.02em;
-    font-variant-numeric: tabular-nums; line-height: 1.15; }
-  .stat .v small { font-size: 13px; font-weight: 500; color: var(--muted); margin-left: 2px; }
-  .stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase;
-    letter-spacing: .06em; margin-top: 1px; }
+  /* ---- Header: title block on the left, stat group on the right ---- */
+  header { position: fixed; top: 0; left: 0; right: 0; z-index: 3;
+    background: rgba(255,255,255,.82); backdrop-filter: saturate(1.4) blur(14px);
+    -webkit-backdrop-filter: saturate(1.4) blur(14px);
+    border-bottom: 1px solid var(--border);
+    box-shadow: 0 1px 0 rgba(20,20,30,.02), 0 6px 20px rgba(20,20,30,.05); }
+  .head-inner { max-width: 1160px; margin: 0 auto; padding: 12px 24px;
+    display: flex; align-items: center; justify-content: space-between; gap: 24px;
+    flex-wrap: wrap; }
+
+  .title { display: flex; align-items: center; gap: 11px; min-width: 0; }
+  .title .mark { width: 5px; height: 30px; border-radius: 3px; flex: none;
+    background: linear-gradient(var(--accent), var(--accent-dark)); }
+  .title h1 { font-size: 16px; font-weight: 700; margin: 0; letter-spacing: -.01em;
+    line-height: 1.15; }
+  .title .date { display: block; color: var(--muted); font-size: 12px;
+    margin-top: 1px; font-variant-numeric: tabular-nums; }
+
+  #stats { display: flex; align-items: stretch; }
+  .stat { padding: 2px 20px; }
+  .stat + .stat { border-left: 1px solid var(--border); }
+  .stat .v { font-size: 23px; font-weight: 650; letter-spacing: -.02em;
+    font-variant-numeric: tabular-nums; line-height: 1.12; color: var(--ink);
+    white-space: nowrap; }
+  .stat .v i { font-size: 12px; font-weight: 600; font-style: normal;
+    color: var(--muted); margin-left: 3px; }
+  .stat .k { font-size: 10.5px; color: var(--faint); text-transform: uppercase;
+    letter-spacing: .07em; margin-top: 3px; font-weight: 600; }
+  .stat.primary .v { color: var(--accent); }
+  @media (max-width: 720px) {
+    #stats { flex-wrap: wrap; }
+    .stat { padding: 2px 14px; }
+    .stat:nth-child(4) { border-left: 0; }
+  }
 
   /* ---- Legend ---- */
   #legend { position: fixed; left: 24px; bottom: 104px; background: var(--card);
@@ -131,18 +149,20 @@
 
 <header style="display:none" id="header">
   <div class="head-inner">
-    <div class="brand">
+    <div class="title">
       <span class="mark"></span>
-      <h1>Ride Viewer</h1>
-      <span class="date" id="date"></span>
+      <div>
+        <h1>Ride Viewer</h1>
+        <span class="date" id="date"></span>
+      </div>
     </div>
     <div id="stats">
-      <div class="stat"><div class="v"><span id="s-dist">0.0</span><small>km</small></div><div class="k">Distance</div></div>
+      <div class="stat primary"><div class="v"><span id="s-dist">0.0</span><i>km</i></div><div class="k">Distance</div></div>
       <div class="stat"><div class="v"><span id="s-time">0:00</span></div><div class="k">Moving Time</div></div>
-      <div class="stat"><div class="v"><span id="s-avg">0</span><small>km/h</small></div><div class="k">Avg Speed</div></div>
-      <div class="stat"><div class="v"><span id="s-max">0</span><small>km/h</small></div><div class="k">Max Speed</div></div>
-      <div class="stat"><div class="v"><span id="s-elev">0</span><small>m</small></div><div class="k">Elev Gain</div></div>
-      <div class="stat"><div class="v"><span id="s-hr">--</span><small>bpm</small></div><div class="k">Avg HR</div></div>
+      <div class="stat"><div class="v"><span id="s-avg">0</span><i>km/h</i></div><div class="k">Avg Speed</div></div>
+      <div class="stat"><div class="v"><span id="s-max">0</span><i>km/h</i></div><div class="k">Max Speed</div></div>
+      <div class="stat"><div class="v"><span id="s-elev">0</span><i>m</i></div><div class="k">Elev Gain</div></div>
+      <div class="stat"><div class="v"><span id="s-hr">--</span><i>bpm</i></div><div class="k">Avg HR</div></div>
     </div>
   </div>
 </header>
