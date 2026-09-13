@@ -1104,20 +1104,25 @@ function frameCamera() {
   if (ride.slab) box.union(new THREE.Box3().setFromObject(ride.slab));
   const c = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
-  // 1.05x (was 1.7x + 120): the old framing sat so far back the specimen was
-  // a small tile in the middle of the viewport on load.
-  const d = Math.max(size.x, size.z, size.y) * 1.05 + 40;
+  const span = Math.max(size.x, size.z, size.y);
+  // Scene scale drives clipping, fog, sky and the orbit limits; the CAMERA
+  // distance is deliberately much tighter (0.52x span, was 1.7x span + 120)
+  // so the specimen fills the viewport on load. Keeping them separate stops
+  // the closer framing from dragging the fog in over the block.
+  const scale = span * 1.7 + 120;
+  const d = span * 0.52 + 20;
   controls.target.copy(c);
   camera.position.set(c.x + d * 0.5, c.y + d * 0.62, c.z + d * 0.68);
-  camera.near = d / 200; camera.far = d * 40; camera.updateProjectionMatrix();
+  camera.near = scale / 200; camera.far = scale * 40;
+  camera.updateProjectionMatrix();
   // Haze only well beyond the framed block, so it reads as depth on a
   // distant corner without ever veiling the map.
-  scene.fog.near = d * 1.6; scene.fog.far = d * 6;
+  scene.fog.near = scale * 1.6; scene.fog.far = scale * 6;
   // Default chase distance, and scroll limits that suit this ride's scale.
-  ride.chaseDist = Math.min(1600, Math.max(160, d * 0.22));
-  controls.minDistance = Math.max(25, d / 400);
-  controls.maxDistance = d * 6;
-  sky.scale.setScalar(d * 12); // comfortably inside camera.far (d * 40)
+  ride.chaseDist = Math.min(1600, Math.max(160, scale * 0.22));
+  controls.minDistance = Math.max(25, scale / 400);
+  controls.maxDistance = scale * 6;
+  sky.scale.setScalar(scale * 12); // comfortably inside camera.far (scale * 40)
 }
 
 // Reveal + head position, driven by time fraction 0..1.
