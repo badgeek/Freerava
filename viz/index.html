@@ -44,6 +44,9 @@
   #legendbar { background: linear-gradient(90deg, #fcd0ae, #fc5200, #8f2d00); }
   #scrub, #exag { accent-color: #fc5200; height: 4px; cursor: pointer; }
   #viewmodes button.on, .pill.on { background: #fc5200; border-color: #fc5200; color: #fff; }
+  /* Menu rows carry .on for state, but they are list items — the accent fill
+     belongs to the pills, so keep them plain and let the dot do the talking. */
+  .fx-item.on { color: #242428; }
   body.dragging #dropwell { border-color: #fc5200; background: #fff7f2; }
 </style>
 </head>
@@ -69,11 +72,13 @@
     </div>
 
     <div id="viewmodes" style="display:none"
-      class="order-last sm:order-none w-full sm:w-auto overflow-x-auto no-sb sm:mx-auto shrink-0 flex items-center bg-canvas border border-bd rounded-full p-[3px] gap-[2px]">
-      <button data-mode="map" class="on text-xs font-semibold text-muted rounded-full px-[13px] py-[6px] leading-none whitespace-nowrap transition hover:text-ink">Map</button>
-      <button data-mode="hybrid" class="text-xs font-semibold text-muted rounded-full px-[13px] py-[6px] leading-none whitespace-nowrap transition hover:text-ink">Map&nbsp;+&nbsp;Elev</button>
-      <button data-mode="grid" class="text-xs font-semibold text-muted rounded-full px-[13px] py-[6px] leading-none whitespace-nowrap transition hover:text-ink">Grid</button>
-      <button data-mode="template" class="text-xs font-semibold text-muted rounded-full px-[13px] py-[6px] leading-none whitespace-nowrap transition hover:text-ink">Elevation</button>
+      class="order-last sm:order-none w-full sm:w-auto sm:mx-auto shrink-0
+             grid grid-cols-4 sm:flex sm:items-center gap-[2px]
+             bg-canvas border border-bd rounded-full p-[3px]">
+      <button data-mode="map" class="on w-full text-center text-[11px] sm:text-xs font-semibold text-muted rounded-full px-1 sm:px-[13px] py-[7px] sm:py-[6px] leading-none whitespace-nowrap transition hover:text-ink">Map</button>
+      <button data-mode="hybrid" class="w-full text-center text-[11px] sm:text-xs font-semibold text-muted rounded-full px-1 sm:px-[13px] py-[7px] sm:py-[6px] leading-none whitespace-nowrap transition hover:text-ink"><span class="sm:hidden">Map+Elev</span><span class="hidden sm:inline">Map&nbsp;+&nbsp;Elev</span></button>
+      <button data-mode="grid" class="w-full text-center text-[11px] sm:text-xs font-semibold text-muted rounded-full px-1 sm:px-[13px] py-[7px] sm:py-[6px] leading-none whitespace-nowrap transition hover:text-ink">Grid</button>
+      <button data-mode="template" class="w-full text-center text-[11px] sm:text-xs font-semibold text-muted rounded-full px-1 sm:px-[13px] py-[7px] sm:py-[6px] leading-none whitespace-nowrap transition hover:text-ink">Elevation</button>
     </div>
 
     <!-- Phone: a 3x2 grid keeps all six stats visible and on a shared grid,
@@ -145,15 +150,31 @@
     <button id="follow"
       class="pill shrink-0 text-[12.5px] font-semibold text-muted border border-bd rounded-full px-[13px] py-[7px]
              whitespace-nowrap transition hover:border-faint hover:text-ink">Chase cam</button>
-    <button id="meteors" title="Meteor shower ahead of the rider"
-      class="pill on shrink-0 text-[12.5px] font-semibold text-muted border border-bd rounded-full px-[13px] py-[7px]
-             whitespace-nowrap transition hover:border-faint hover:text-ink">Meteors</button>
-    <button id="zombies" title="Zombie horde chasing the rider"
-      class="pill on shrink-0 text-[12.5px] font-semibold text-muted border border-bd rounded-full px-[13px] py-[7px]
-             whitespace-nowrap transition hover:border-faint hover:text-ink">Zombies</button>
-    <button id="riot" title="Riot squad roadblocks across the route"
-      class="pill on shrink-0 text-[12.5px] font-semibold text-muted border border-bd rounded-full px-[13px] py-[7px]
-             whitespace-nowrap transition hover:border-faint hover:text-ink">Riot</button>
+    <!-- The three apocalypse toggles collapse into one menu: they're scenery,
+         not primary transport controls, and three more pills blew the phone
+         row out. The popup carries the live on/off state so nothing is lost. -->
+    <div class="relative shrink-0">
+      <button id="fx" title="Apocalypse effects" aria-expanded="false"
+        class="pill on shrink-0 flex items-center gap-1.5 text-[12.5px] font-semibold text-muted
+               border border-bd rounded-full px-[13px] py-[7px] whitespace-nowrap
+               transition hover:border-faint hover:text-ink">
+        Effects <span id="fx-count" class="opacity-70 tabular-nums">3</span>
+        <svg viewBox="0 0 10 6" class="w-2.5 h-1.5 fill-none stroke-current stroke-[1.6]"
+          stroke-linecap="round" stroke-linejoin="round"><path d="M1 1l4 4 4-4"/></svg>
+      </button>
+      <div id="fxmenu" class="hide absolute bottom-[calc(100%+8px)] right-0 z-[4] w-[178px]
+             bg-card border border-bd rounded-xl shadow-card p-1.5">
+        <button data-fx="meteors" class="fx-item on w-full flex items-center justify-between gap-2
+          rounded-lg px-2.5 py-2 text-[12.5px] font-semibold text-muted transition hover:bg-canvas">
+          <span>Meteors</span><span class="fx-dot w-2 h-2 rounded-full bg-bd"></span></button>
+        <button data-fx="zombies" class="fx-item on w-full flex items-center justify-between gap-2
+          rounded-lg px-2.5 py-2 text-[12.5px] font-semibold text-muted transition hover:bg-canvas">
+          <span>Zombies</span><span class="fx-dot w-2 h-2 rounded-full bg-bd"></span></button>
+        <button data-fx="riot" class="fx-item on w-full flex items-center justify-between gap-2
+          rounded-lg px-2.5 py-2 text-[12.5px] font-semibold text-muted transition hover:bg-canvas">
+          <span>Riot squad</span><span class="fx-dot w-2 h-2 rounded-full bg-bd"></span></button>
+      </div>
+    </div>
     <span id="reliefctl" class="flex shrink-0 items-center gap-[7px] text-muted text-[11.5px] font-semibold uppercase tracking-wide whitespace-nowrap">
       Relief <input id="exag" type="range" min="0" max="40" value="12" class="w-16 sm:w-20" /></span>
   </div>
@@ -2302,16 +2323,51 @@ document.getElementById('follow').addEventListener('click', e => {
   if (follow) chaseSnap();   // pull back to a sensible chase distance
   else frameCamera();        // back to the framed overview
 });
-document.getElementById('meteors').addEventListener('click', e => {
-  meteorsOn = !meteorsOn; e.target.classList.toggle('on', meteorsOn);
-  // the field clears itself on its next tick (meteorTick)
+// ---- Effects menu: one button standing in for the three apocalypse toggles.
+// Each tick still just flips its own flag — the fields clear themselves on
+// their next tick (meteorTick / zombieTick / riotTick), so nothing here has to
+// tear anything down.
+const fxBtn = document.getElementById('fx');
+const fxMenu = document.getElementById('fxmenu');
+const fxGet = { meteors: () => meteorsOn, zombies: () => zombiesOn, riot: () => riotOn };
+const fxSet = {
+  meteors: v => { meteorsOn = v; },
+  zombies: v => { zombiesOn = v; },
+  riot: v => { riotOn = v; },
+};
+function fxSync() {
+  let n = 0;
+  for (const b of fxMenu.querySelectorAll('[data-fx]')) {
+    const on = fxGet[b.dataset.fx]();
+    if (on) n++;
+    b.classList.toggle('on', on);
+    b.querySelector('.fx-dot').style.background = on ? '#fc5200' : '#e6e6eb';
+  }
+  document.getElementById('fx-count').textContent = String(n);
+  fxBtn.classList.toggle('on', n > 0); // the button reads as live while any act runs
+}
+function fxOpen(on) {
+  fxMenu.classList.toggle('hide', !on);
+  fxBtn.setAttribute('aria-expanded', String(on));
+}
+fxBtn.addEventListener('click', e => {
+  e.stopPropagation();
+  fxOpen(fxMenu.classList.contains('hide'));
 });
-document.getElementById('zombies').addEventListener('click', e => {
-  zombiesOn = !zombiesOn; e.target.classList.toggle('on', zombiesOn);
+fxMenu.addEventListener('click', e => {
+  const b = e.target.closest('[data-fx]');
+  if (!b) return;
+  e.stopPropagation();           // keep the menu open for a second toggle
+  fxSet[b.dataset.fx](!fxGet[b.dataset.fx]());
+  fxSync();
 });
-document.getElementById('riot').addEventListener('click', e => {
-  riotOn = !riotOn; e.target.classList.toggle('on', riotOn);
+// Tap anywhere else (including the 3D canvas) dismisses it.
+addEventListener('pointerdown', e => {
+  if (!fxMenu.classList.contains('hide') && !fxMenu.contains(e.target) && e.target !== fxBtn)
+    fxOpen(false);
 });
+addEventListener('keydown', e => { if (e.key === 'Escape') fxOpen(false); });
+fxSync();
 document.getElementById('exag').addEventListener('input', e => {
   exag = Number(e.target.value);
   if (!ride) return;
