@@ -15,6 +15,7 @@
 #include "core/track.h"
 
 #ifdef __ANDROID__
+#include "camera_android.h"
 #include "compass_android.h"
 #include <sys/stat.h>
 #endif
@@ -42,6 +43,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <memory>
+#include <thread>
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -157,6 +159,22 @@ std::string export_path(std::time_t ended_at, std::string *name_out = nullptr) {
 #else
     const char *h = std::getenv("HOME");
     return std::string(h ? h : ".") + "/cyclomp_" + name;
+#endif
+}
+
+// Ride selfies land in an app-private folder (no storage permission needed).
+// Named by capture time so they sort, and so a later photo->track join can be
+// done on the timestamp alone.
+std::string photo_path(std::time_t when) {
+#ifdef __ANDROID__
+    ::mkdir("/data/data/dev.bauhouse.cyclomp/files", 0700);
+    ::mkdir("/data/data/dev.bauhouse.cyclomp/files/photos", 0700);
+    return "/data/data/dev.bauhouse.cyclomp/files/photos/selfie_"
+           + std::to_string((long long)when) + ".jpg";
+#else
+    const char *h = std::getenv("HOME");
+    return std::string(h ? h : ".") + "/cyclomp_selfie_"
+           + std::to_string((long long)when) + ".jpg";
 #endif
 }
 
@@ -1062,6 +1080,52 @@ int main(int, char **)
             // before the user switches to another app).
             save_active();
         });
+
+    // ---- Ride selfie ----------------------------------------------------
+    // selfie::capture blocks for a few hundred ms while the HAL converges and
+    // delivers, so it runs on a detached thread; the result hops back to the
+    // Slint loop because touching window state off-thread aborts.
+#ifdef __ANDROID__
+    ui->set_camera_available(selfie::available());
+    ui->on_take_photo([ui = slint::ComponentWeakHandle(ui), current_position] {
+        auto u = ui.lock();
+        if (!u) return;
+        (*u)->set_photo_status(slint::SharedString("CAPTURING..."));
+
+        // Stamp the position at the moment of the shutter, not when the frame
+        // lands — by then you have moved.
+        double la = 0, lo = 0;
+        const bool fixed = current_position(la, lo);
+        const std::time_t when = std::time(nullptr);
+        const std::string path = photo_path(when);
+
+        std::thread([ui, path, when, la, lo, fixed] {
+            selfie::capture(path, [&](selfie::Shot shot) {
+                std::string msg;
+                if (shot.ok) {
+                    char buf[128];
+                    if (fixed)
+                        std::snprintf(buf, sizeof buf, "SAVED %dx%d @ %.5f,%.5f",
+                                      shot.width, shot.height, la, lo);
+                    else
+                        std::snprintf(buf, sizeof buf, "SAVED %dx%d (NO FIX)",
+                                      shot.width, shot.height);
+                    msg = buf;
+                    __android_log_print(ANDROID_LOG_INFO, "cyclomp-camera",
+                                        "selfie %s lat=%.6f lon=%.6f fix=%d t=%lld",
+                                        path.c_str(), la, lo, (int)fixed,
+                                        (long long)when);
+                } else {
+                    msg = "FAILED: " + shot.error;
+                }
+                slint::invoke_from_event_loop([ui, msg] {
+                    if (auto u = ui.lock())
+                        (*u)->set_photo_status(slint::SharedString(msg));
+                });
+            });
+        }).detach();
+    });
+#endif
 
     // Finalize the ride: save a summary row, then return to idle.
     ui->on_stop_ride(

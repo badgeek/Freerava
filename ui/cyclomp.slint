@@ -488,6 +488,10 @@ export component AppWindow inherits Window {
 
     callback toggle-ride();  // idle->start, running->pause, paused->resume
     callback stop-ride();    // finalize + save session
+    // ---- Ride selfies (front camera, NDK Camera2; Android only) ----
+    in property <bool> camera-available: false; // C++ hides the button otherwise
+    in property <string> photo-status;          // transient capture feedback
+    callback take-photo();
     callback map-zoom(int);  // +1 / -1 zoom step
     callback map-locate();   // recentre on the rider and relock the camera
     callback map-pan(float, float);          // one-finger drag delta (px)
@@ -677,6 +681,29 @@ export component AppWindow inherits Window {
                     label: "TERMINATE";
                     tint: Palette.red;
                     pressed => { root.stop-ride(); }
+                }
+                // Ride selfie. Deliberately a wide, fixed target: you tap this
+                // without looking. Hidden where there is no front camera.
+                if root.camera-available : TermButton {
+                    width: 96px;
+                    label: "SELFIE";
+                    tint: Palette.cyan;
+                    pressed => { root.take-photo(); }
+                }
+            }
+            // Capture feedback — the only thing there is to see, since the
+            // capture has no viewfinder.
+            if root.photo-status != "" : Rectangle {
+                height: 18px;
+                background: Palette.ink;
+                Text {
+                    text: root.photo-status;
+                    color: Palette.cyan;
+                    font-size: 10px;
+                    font-weight: 700;
+                    letter-spacing: 1px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
                 }
             }
             Rectangle { height: 8px; background: Palette.ink; }
