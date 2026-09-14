@@ -50,6 +50,9 @@ src/map_gl.*         Android GPU map service (own thread, headless mbgl,
 src/map_service.*    desktop CPU map path (glReadPixels — fine for dev).
 src/gps_telemetry_android.*  real GPS TelemetrySource (JNI LocationManager)
 src/compass_android.*        rotation-vector compass (NDK sensor C API)
+src/camera_android.*         ride selfies: NDK Camera2 + AImageReader (C APIs,
+                     namespace `selfie` — main.cpp already has a follow-camera
+                     called `camera`). Opens front lens, ONE frame, closes.
 ui/cyclomp.slint     screens: 0 RIDE, 1 MAP, 2 HISTORY, 3 ride detail.
 ```
 
@@ -108,6 +111,18 @@ Rules that kept this codebase healthy:
   dlsym's OUR lib before libslint_cpp.so; store `NewGlobalRef(clazz)` there
   (`cyclomp_activity()`), then forward to Slint's real entry point.
 - Sensors need NO permission and NO Java (`ASensorManager` C API).
+- Camera likewise: `libcamera2ndk` + `AImageReader` are plain C. Link
+  `camera2ndk mediandk`. The HAL returns a FINISHED JPEG (AIMAGE_FORMAT_JPEG)
+  — writing it is an fwrite, no encoder — and it already carries an EXIF APP1
+  block, so GPS tagging means editing that, not authoring one. Every Camera2
+  callback lands on a HAL thread: funnel through a mutex/condvar and let the
+  caller wait. CAMERA is runtime-permission, same no-callback problem as
+  location (request once, re-check `checkSelfPermission` later).
+- MEMORY REALITY CHECK: this Redmi 9 has 5.6 GB (`/proc/meminfo MemTotal`),
+  not 2 GB, and the whole app sits at ~190 MB PSS with the map running
+  (native heap ~53 MB, EGL ~42 MB). The 1.4 GB incident above was the
+  `theJVM` thread-storm BUG, not a normal working set — don't design around
+  a memory ceiling that isn't there.
 - The Slint runtime CANNOT be started twice in one process. BACK finishes the
   activity but Android keeps the process (HOME only pauses — that's why HOME
   always worked); the recreated activity runs `slint_main` on a FRESH
