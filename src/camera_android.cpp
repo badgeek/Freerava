@@ -121,8 +121,11 @@ void cap_progressed(void *, ACameraCaptureSession *, ACaptureRequest *,
 void cap_completed(void *, ACameraCaptureSession *, ACaptureRequest *,
                    const ACameraMetadata *) {}
 
-// Pick the front-facing camera id. Returns empty when there isn't one.
-std::string front_camera_id(ACameraManager *mgr) {
+// Pick a camera id by which way it faces. Returns empty when the device has
+// none pointing that way.
+std::string camera_id_for(ACameraManager *mgr, Lens lens) {
+    const uint8_t want = lens == Lens::Front ? ACAMERA_LENS_FACING_FRONT
+                                             : ACAMERA_LENS_FACING_BACK;
     ACameraIdList *ids = nullptr;
     if (ACameraManager_getCameraIdList(mgr, &ids) != ACAMERA_OK || !ids) return {};
     std::string found;
@@ -133,7 +136,7 @@ std::string front_camera_id(ACameraManager *mgr) {
             continue;
         ACameraMetadata_const_entry e{};
         if (ACameraMetadata_getConstEntry(meta, ACAMERA_LENS_FACING, &e) == ACAMERA_OK
-            && e.count > 0 && e.data.u8[0] == ACAMERA_LENS_FACING_FRONT)
+            && e.count > 0 && e.data.u8[0] == want)
             found = ids->cameraIds[i];
         ACameraMetadata_free(meta);
         if (!found.empty()) break;
@@ -168,17 +171,19 @@ void best_jpeg_size(ACameraManager *mgr, const std::string &id, int *w, int *h) 
 
 } // namespace
 
-bool available() {
-    static int cached = -1;
-    if (cached >= 0) return cached == 1;
+bool available(Lens lens) {
+    static int cached[2] = {-1, -1};
+    const int slot = lens == Lens::Front ? 0 : 1;
+    if (cached[slot] >= 0) return cached[slot] == 1;
     ACameraManager *mgr = ACameraManager_create();
-    cached = 0;
+    cached[slot] = 0;
     if (mgr) {
-        cached = front_camera_id(mgr).empty() ? 0 : 1;
+        cached[slot] = camera_id_for(mgr, lens).empty() ? 0 : 1;
         ACameraManager_delete(mgr);
     }
-    CAM_LOG("front camera available: %s", cached ? "yes" : "no");
-    return cached == 1;
+    CAM_LOG("%s camera available: %s", lens == Lens::Front ? "front" : "back",
+            cached[slot] ? "yes" : "no");
+    return cached[slot] == 1;
 }
 
 bool permission_granted() {
@@ -224,7 +229,8 @@ void request_permission() {
     e->PopLocalFrame(nullptr);
 }
 
-void capture(const std::string &path, std::function<void(Shot)> done) {
+void capture(const std::string &path, Lens lens,
+             std::function<void(Shot)> done) {
     Shot shot;
     shot.path = path;
 
@@ -240,10 +246,10 @@ void capture(const std::string &path, std::function<void(Shot)> done) {
     ACameraManager *mgr = ACameraManager_create();
     if (!mgr) { shot.error = "no camera manager"; done(shot); return; }
 
-    const std::string id = front_camera_id(mgr);
+    const std::string id = camera_id_for(mgr, lens);
     if (id.empty()) {
         ACameraManager_delete(mgr);
-        shot.error = "no front camera";
+        shot.error = lens == Lens::Front ? "no front camera" : "no back camera";
         done(shot);
         return;
     }
@@ -337,7 +343,9 @@ void capture(const std::string &path, std::function<void(Shot)> done) {
     shot.error = pending.error;
     shot.width = pending.width;
     shot.height = pending.height;
-    if (shot.ok) CAM_LOG("captured %dx%d -> %s", shot.width, shot.height, path.c_str());
+    if (shot.ok) CAM_LOG("captured %s %dx%d -> %s",
+                         lens == Lens::Front ? "front" : "back",
+                         shot.width, shot.height, path.c_str());
     else CAM_ERR("capture failed: %s", shot.error.c_str());
     done(shot);
 }

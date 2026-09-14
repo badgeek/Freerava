@@ -16,9 +16,13 @@
 
 namespace selfie {
 
-// Is a capture worth offering at all (device has a front camera + we can see
-// the NDK)? Cheap, cached after the first call.
-bool available();
+// Which way the lens points. Front = the rider (a selfie), Back = the road
+// ahead (the view you actually stopped for).
+enum class Lens { Front, Back };
+
+// Is a capture worth offering on this lens (the device has one + we can see
+// the NDK)? Cheap, cached per lens after the first call.
+bool available(Lens lens);
 
 // Permission state, re-checked live (there is no callback to listen on).
 bool permission_granted();
@@ -32,11 +36,11 @@ struct Shot {
     int width = 0, height = 0;
 };
 
-// Take one still and write it to `path`. BLOCKS until the frame arrives or the
-// timeout expires, so call it off the UI thread (or accept a ~300-600 ms
-// hitch). `done` is invoked with the result on the CALLING thread — the caller
-// is responsible for hopping back to the Slint loop via
+// Take one still on `lens` and write it to `path`. BLOCKS until the frame
+// arrives or the timeout expires, so call it off the UI thread (or accept a
+// ~300-600 ms hitch). `done` is invoked with the result on the CALLING thread —
+// the caller is responsible for hopping back to the Slint loop via
 // slint::invoke_from_event_loop before touching any UI.
-void capture(const std::string &path, std::function<void(Shot)> done);
+void capture(const std::string &path, Lens lens, std::function<void(Shot)> done);
 
 } // namespace selfie

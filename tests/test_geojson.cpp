@@ -91,6 +91,7 @@ TEST_CASE("photos become Point features carrying their thumbnail") {
     CHECK(g.find("[106.8600000,-6.2500000]") != std::string::npos); // its own fix
     CHECK(g.find("\"taken_at\":4321") != std::string::npos);
     CHECK(g.find("\"has_fix\":true") != std::string::npos);
+    CHECK(g.find("\"front\":true") != std::string::npos);
     // The fixture's third byte isn't 0xFF, so this won't be the familiar
     // "/9j/" prefix — that shape is asserted against a real camera JPEG in
     // test_photo.cpp. Here, just that a non-empty data URI was emitted.
@@ -108,9 +109,11 @@ TEST_CASE("a photo with no fix is placed on the track by elapsed time") {
     Photo drifting;
     drifting.path = photo_fixture("nofix");
     drifting.has_fix = false; drifting.t_s = 50; // exactly halfway
+    drifting.front = false;                      // shot looking ahead
 
     const std::string g = session_to_geojson(s, {drifting});
     CHECK(g.find("\"has_fix\":false") != std::string::npos);
+    CHECK(g.find("\"front\":false") != std::string::npos);
     // Interpolated to the midpoint rather than dumped at 0,0.
     CHECK(g.find("[106.0500000,-6.0500000]") != std::string::npos);
     CHECK(g.find("[0.0000000,0.0000000]") == std::string::npos);

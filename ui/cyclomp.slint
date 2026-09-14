@@ -488,10 +488,11 @@ export component AppWindow inherits Window {
 
     callback toggle-ride();  // idle->start, running->pause, paused->resume
     callback stop-ride();    // finalize + save session
-    // ---- Ride selfies (front camera, NDK Camera2; Android only) ----
-    in property <bool> camera-available: false; // C++ hides the button otherwise
-    in property <string> photo-status;          // transient capture feedback
-    callback take-photo();
+    // ---- Ride photos (NDK Camera2; Android only) ----
+    in property <bool> camera-available: false;      // front lens present
+    in property <bool> rear-camera-available: false; // back lens present
+    in property <string> photo-status;               // transient capture feedback
+    callback take-photo(bool);                       // true = front (selfie)
     callback map-zoom(int);  // +1 / -1 zoom step
     callback map-locate();   // recentre on the rider and relock the camera
     callback map-pan(float, float);          // one-finger drag delta (px)
@@ -682,13 +683,19 @@ export component AppWindow inherits Window {
                     tint: Palette.red;
                     pressed => { root.stop-ride(); }
                 }
-                // Ride selfie. Deliberately a wide, fixed target: you tap this
-                // without looking. Hidden where there is no front camera.
+                // Ride photos. Deliberately wide, fixed targets: you tap these
+                // without looking. Each is hidden where that lens is absent.
+                if root.rear-camera-available : TermButton {
+                    width: 84px;
+                    label: "PHOTO";
+                    tint: Palette.amber;
+                    pressed => { root.take-photo(false); }
+                }
                 if root.camera-available : TermButton {
-                    width: 96px;
+                    width: 84px;
                     label: "SELFIE";
                     tint: Palette.cyan;
-                    pressed => { root.take-photo(); }
+                    pressed => { root.take-photo(true); }
                 }
             }
             // Capture feedback — the only thing there is to see, since the

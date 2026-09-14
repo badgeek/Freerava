@@ -188,7 +188,7 @@ TEST_CASE("photos are taken unbound, then claimed by the finished ride") {
 
     // Mid-ride: the session does not exist yet, so photos land with id 0.
     Photo a; a.taken_at = 1000; a.lat = -7.73; a.lon = 110.38; a.has_fix = true;
-    a.t_s = 12.5; a.path = "/files/photos/a.jpg";
+    a.t_s = 12.5; a.path = "/files/photos/a.jpg"; a.front = false; // rear lens
     Photo b; b.taken_at = 1100; b.has_fix = false; b.t_s = 90; b.path = "/files/photos/b.jpg";
     REQUIRE(db.add_photo(a));
     REQUIRE(db.add_photo(b));
@@ -217,6 +217,8 @@ TEST_CASE("photos are taken unbound, then claimed by the finished ride") {
     CHECK(got[0].t_s == doctest::Approx(12.5));
     CHECK(got[0].path == "/files/photos/a.jpg");
     CHECK(got[0].session_id == s.id);
+    CHECK_FALSE(got[0].front); // which lens shot it survives the round trip
+    CHECK(got[1].front);       // default stays front
 }
 
 TEST_CASE("a later ride cannot steal the previous ride's photos") {

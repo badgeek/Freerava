@@ -32,7 +32,8 @@ constexpr const char *kSchema =
     // session_id 0 = taken but not yet claimed by a finished ride.
     "CREATE TABLE IF NOT EXISTS photo("
     " id INTEGER PRIMARY KEY, session_id INTEGER, taken_at INTEGER,"
-    " lat REAL, lon REAL, has_fix INTEGER, t_s REAL, path TEXT);"
+    " lat REAL, lon REAL, has_fix INTEGER, t_s REAL, path TEXT,"
+    " front INTEGER DEFAULT 1);"
     "CREATE INDEX IF NOT EXISTS idx_photo ON photo(session_id, taken_at);";
 
 } // namespace
@@ -59,6 +60,10 @@ bool SessionStore::open(const std::string &db_path) {
         close();
         return false;
     }
+    // CREATE TABLE IF NOT EXISTS leaves an older photo table untouched, so add
+    // the column that came later. Failure here is the expected case (the column
+    // is already there) and is deliberately ignored.
+    exec("ALTER TABLE photo ADD COLUMN front INTEGER DEFAULT 1");
     return true;
 }
 
@@ -348,7 +353,7 @@ bool SessionStore::add_photo(Photo &p) {
     sqlite3_stmt *st = nullptr;
     if (sqlite3_prepare_v2(db_,
                            "INSERT INTO photo(session_id,taken_at,lat,lon,has_fix,"
-                           "t_s,path) VALUES(?,?,?,?,?,?,?)",
+                           "t_s,path,front) VALUES(?,?,?,?,?,?,?,?)",
                            -1, &st, nullptr) != SQLITE_OK)
         return false;
     sqlite3_bind_int64(st, 1, (sqlite3_int64)p.session_id);
@@ -358,6 +363,7 @@ bool SessionStore::add_photo(Photo &p) {
     sqlite3_bind_int(st, 5, p.has_fix ? 1 : 0);
     sqlite3_bind_double(st, 6, p.t_s);
     sqlite3_bind_text(st, 7, p.path.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(st, 8, p.front ? 1 : 0);
     const bool okv = sqlite3_step(st) == SQLITE_DONE;
     sqlite3_finalize(st);
     if (okv) p.id = (long long)sqlite3_last_insert_rowid(db_);
@@ -380,8 +386,8 @@ bool SessionStore::photos_for(long long session_id, std::vector<Photo> &out) con
     if (!db_) return false;
     sqlite3_stmt *st = nullptr;
     if (sqlite3_prepare_v2(db_,
-                           "SELECT id,session_id,taken_at,lat,lon,has_fix,t_s,path "
-                           "FROM photo WHERE session_id=? ORDER BY taken_at ASC",
+                           "SELECT id,session_id,taken_at,lat,lon,has_fix,t_s,path,"
+                           "front FROM photo WHERE session_id=? ORDER BY taken_at ASC",
                            -1, &st, nullptr) != SQLITE_OK)
         return false;
     sqlite3_bind_int64(st, 1, (sqlite3_int64)session_id);
@@ -396,6 +402,7 @@ bool SessionStore::photos_for(long long session_id, std::vector<Photo> &out) con
         p.t_s = sqlite3_column_double(st, 6);
         if (const unsigned char *t = sqlite3_column_text(st, 7))
             p.path = reinterpret_cast<const char *>(t);
+        p.front = sqlite3_column_int(st, 8) != 0;
         out.push_back(p);
     }
     sqlite3_finalize(st);

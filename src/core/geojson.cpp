@@ -103,6 +103,8 @@ std::string session_to_geojson(const SessionSummary &s,
         appendf(o, ",\"t_s\":%.2f", ph.t_s);
         o += ",\"has_fix\":";
         o += ph.has_fix ? "true" : "false";
+        o += ",\"front\":";
+        o += ph.front ? "true" : "false";
         o += ",\"thumb\":\"data:image/jpeg;base64,";
         o += thumb;
         o += "\"}}";

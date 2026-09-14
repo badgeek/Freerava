@@ -17,6 +17,7 @@
 #ifdef __ANDROID__
 #include "camera_android.h"
 #include "compass_android.h"
+#include "ride_service_android.h"
 #include <sys/stat.h>
 #endif
 
@@ -165,15 +166,17 @@ std::string export_path(std::time_t ended_at, std::string *name_out = nullptr) {
 // Ride selfies land in an app-private folder (no storage permission needed).
 // Named by capture time so they sort, and so a later photo->track join can be
 // done on the timestamp alone.
-std::string photo_path(std::time_t when) {
+std::string photo_path(std::time_t when, bool front) {
 #ifdef __ANDROID__
     ::mkdir("/data/data/dev.bauhouse.cyclomp/files", 0700);
     ::mkdir("/data/data/dev.bauhouse.cyclomp/files/photos", 0700);
-    return "/data/data/dev.bauhouse.cyclomp/files/photos/selfie_"
+    return "/data/data/dev.bauhouse.cyclomp/files/photos/"
+           + std::string(front ? "selfie_" : "photo_")
            + std::to_string((long long)when) + ".jpg";
 #else
     const char *h = std::getenv("HOME");
-    return std::string(h ? h : ".") + "/cyclomp_selfie_"
+    return std::string(h ? h : ".") + "/cyclomp_"
+           + std::string(front ? "selfie_" : "photo_")
            + std::to_string((long long)when) + ".jpg";
 #endif
 }
@@ -445,6 +448,14 @@ int main(int, char **)
         recorder->restore(std::move(resumed.track));
         auto &w = *ui;
         w.set_ride_state((int)engine->state());
+#ifdef __ANDROID__
+        // A ride was in progress when the process last died — bring the
+        // foreground service back so it keeps recording this launch too.
+        if (engine->state() != core::RideState::Idle) {
+            ridesvc::request_notification_permission();
+            ridesvc::start();
+        }
+#endif
         publish_live(w, engine->live(), sensors);
         w.set_live_elev_path(slint::SharedString(
             core::elevation_profile_path(recorder->points(), 160, 60)));
@@ -1065,6 +1076,12 @@ int main(int, char **)
             auto &w = **u;
             if (engine->state() == core::RideState::Idle) {
                 on_ride_start();
+#ifdef __ANDROID__
+                // Recording is about to start; keep the process alive and off
+                // the background-location throttle while the app is pocketed.
+                ridesvc::request_notification_permission();
+                ridesvc::start();
+#endif
                 if (mock) mock->reset_ride();
                 recorder->reset();
                 w.set_live_elev_path(slint::SharedString(""));
@@ -1088,25 +1105,28 @@ int main(int, char **)
     // delivers, so it runs on a detached thread; the result hops back to the
     // Slint loop because touching window state off-thread aborts.
 #ifdef __ANDROID__
-    ui->set_camera_available(selfie::available());
+    ui->set_camera_available(selfie::available(selfie::Lens::Front));
+    ui->set_rear_camera_available(selfie::available(selfie::Lens::Back));
     ui->on_take_photo([ui = slint::ComponentWeakHandle(ui), current_position,
-                       store, engine] {
+                       store, engine](bool front) {
         auto u = ui.lock();
         if (!u) return;
-        (*u)->set_photo_status(slint::SharedString("CAPTURING..."));
+        (*u)->set_photo_status(slint::SharedString(front ? "CAPTURING SELFIE..."
+                                                         : "CAPTURING PHOTO..."));
 
         // Stamp the position at the moment of the shutter, not when the frame
         // lands — by then you have moved.
         double la = 0, lo = 0;
         const bool fixed = current_position(la, lo);
         const std::time_t when = std::time(nullptr);
-        const std::string path = photo_path(when);
+        const std::string path = photo_path(when, front);
         // Elapsed ride time is what places the photo on the track later when
         // there was no fix at the shutter.
         const double t_s = engine->live().elapsed_s;
 
-        std::thread([ui, path, when, la, lo, fixed, t_s, store] {
-            selfie::capture(path, [&](selfie::Shot shot) {
+        std::thread([ui, path, when, la, lo, fixed, t_s, store, front] {
+            const auto lens = front ? selfie::Lens::Front : selfie::Lens::Back;
+            selfie::capture(path, lens, [&](selfie::Shot shot) {
                 std::string msg;
                 if (shot.ok) {
                     char buf[128];
@@ -1127,7 +1147,7 @@ int main(int, char **)
                         core::Photo rec;
                         rec.taken_at = when;
                         rec.lat = la; rec.lon = lo; rec.has_fix = fixed;
-                        rec.t_s = t_s; rec.path = path;
+                        rec.t_s = t_s; rec.path = path; rec.front = front;
                         if (!store->add_photo(rec))
                             __android_log_print(ANDROID_LOG_ERROR, "cyclomp-camera",
                                                 "photo saved but NOT recorded: %s",
@@ -1153,6 +1173,9 @@ int main(int, char **)
             if (!u) return;
             auto &w = **u;
             if (engine->state() == core::RideState::Idle) return;
+#ifdef __ANDROID__
+            ridesvc::stop(); // ride finished: let the process be backgrounded
+#endif
             if (auto s = engine->stop(std::time(nullptr))) {
                 s->track = recorder->points();
                 // Store first: add_session stamps the new rowid onto `s`, and

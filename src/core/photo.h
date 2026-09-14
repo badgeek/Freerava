@@ -19,6 +19,7 @@ struct Photo {
     std::time_t taken_at = 0;
     double lat = 0, lon = 0;
     bool has_fix = false;      // false when the shutter beat the first GPS fix
+    bool front = true;         // front lens = a selfie; back = the view ahead
     double t_s = 0;            // seconds into the ride, for ordering on the track
     std::string path;          // full-resolution JPEG on the device
 };
