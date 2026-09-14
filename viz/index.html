@@ -186,6 +186,20 @@
   </div>
 </div>
 
+<!-- Ride selfie lightbox. The embedded thumbnail is only 176x128, so it is
+     shown at a modest size and pixel-art-scaled rather than blown up blurry. -->
+<div id="lightbox" class="hide fixed inset-0 z-[7] flex items-center justify-center
+     bg-ink/70 backdrop-blur-sm cursor-pointer p-6">
+  <div class="bg-card border border-bd rounded-2xl shadow-card p-3 max-w-[92vw]">
+    <img id="lb-img" alt="Ride selfie"
+      class="block rounded-lg w-[352px] max-w-full h-auto [image-rendering:auto]" />
+    <div class="flex items-center justify-between gap-4 px-1 pt-2.5">
+      <span id="lb-when" class="text-muted text-[12px] tabular-nums"></span>
+      <span id="lb-where" class="text-faint text-[11px] tabular-nums"></span>
+    </div>
+  </div>
+</div>
+
 <div id="drop"
   class="fixed inset-0 z-[5] flex items-center justify-center bg-canvas/95 cursor-pointer">
   <div class="bg-card border border-bd rounded-2xl shadow-card mx-4 px-6 sm:px-14 py-8 sm:py-11 text-center max-w-[460px]">
@@ -374,7 +388,7 @@ function clearRide() {
   if (!ride) return;
   for (const o of [ride.route, ride.curtain, ride.head, ride.startDot,
                    ride.endDot, ride.terrain, ride.wire, ride.skirt, ride.cap,
-                   ride.shadow, ride.base, ride.detail, ride.slab,
+                   ride.shadow, ride.base, ride.detail, ride.photoPins, ride.slab,
                    ride.meteors, ride.zombies, ride.riot])
     disposeObj(o);
   grid.visible = true;
@@ -1412,7 +1426,17 @@ function buildRide(gj) {
   const cumD = [0];
   for (let i = 1; i < P.length; i++) cumD.push(cumD[i - 1] + P[i].distanceTo(P[i - 1]));
 
-  const g = { P, proj, coords, speed, tArr, vNorm, vMin, vMax, cumD,
+  // Ride selfies: Point features the app tagged, each carrying its own
+  // thumbnail as a data: URI (the full-resolution JPEG stays on the phone).
+  const photos = (gj.features || [])
+    .filter(f => f.geometry?.type === 'Point' && f.properties?.kind === 'photo'
+                 && f.properties?.thumb)
+    .map(f => ({ lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1],
+                 thumb: f.properties.thumb, t_s: f.properties.t_s ?? 0,
+                 takenAt: f.properties.taken_at ?? 0,
+                 hasFix: f.properties.has_fix !== false }));
+
+  const g = { P, proj, coords, speed, tArr, vNorm, vMin, vMax, cumD, photos,
               tMin: tArr[0], tMax: tArr[tArr.length - 1],
               summary: gj.properties || {} };
   ride = g;
@@ -1432,11 +1456,79 @@ function buildRide(gj) {
   g.riot = makeRiotSquad(g);
   g.startDot.position.copy(g.drawn[0]);
   g.endDot.position.copy(g.drawn[g.drawn.length - 1]);
+  g.photoPins = makePhotoPins(g);
 
   frameCamera();
   headT = 1; setProgress(1);
   showChrome(g.summary, vMin, vMax);
   buildSlab(g); // async: the map diorama pops in when its tiles arrive
+}
+
+// ---- Ride selfies -----------------------------------------------------------
+// One camera-facing billboard per photo, standing on a short post above the
+// route. Sprites rather than planes so a photo is readable from any orbit
+// angle, and the texture comes straight from the embedded data: URI — no
+// network, no files alongside the .geojson.
+function makePhotoPins(g) {
+  if (!g.photos || !g.photos.length) return null;
+  const group = new THREE.Group();
+  const loader = new THREE.TextureLoader();
+  const s = g.mScale;
+
+  for (const ph of g.photos) {
+    // Place it on the route by time, so a pin sits where the rider actually
+    // was; falls back to its own tagged position when it has a real fix.
+    const pos = photoAnchor(g, ph);
+
+    const post = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.45 * s, 0.45 * s, 26 * s, 6),
+      new THREE.MeshBasicMaterial({ color: 0x8b8b94 }));
+    post.position.set(pos.x, pos.y + 13 * s, pos.z);
+    group.add(post);
+
+    const tex = loader.load(ph.thumb);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const frame = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0xffffff }));
+    const pic = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex }));
+    // 176x128 thumbnails: keep that aspect so faces aren't stretched.
+    const w = 34 * s, h = w * (128 / 176);
+    frame.scale.set(w + 2.4 * s, h + 2.4 * s, 1);
+    pic.scale.set(w, h, 1);
+    const y = pos.y + (26 + h / 2) * s;
+    frame.position.set(pos.x, y, pos.z);
+    pic.position.set(pos.x, y, pos.z);
+    frame.renderOrder = 3; pic.renderOrder = 4;
+    pic.userData.photo = ph;   // what the raycaster hands back on click
+    group.add(frame); group.add(pic);
+  }
+  scene.add(group);
+  return group;
+}
+
+// Where a photo belongs in world space: its own fix if it had one, otherwise
+// interpolated along the drawn route by elapsed time (the exporter already
+// does this for the coordinates, but the drawn route is what we can see).
+function photoAnchor(g, ph) {
+  const { lat0, lon0, kx, kz } = g.proj;
+  if (ph.hasFix)
+    return nearestOnRoute(g, (ph.lon - lon0) * kx, -(ph.lat - lat0) * kz);
+  let i = 1;
+  while (i < g.tArr.length && g.tArr[i] < ph.t_s) i++;
+  const a = g.drawn[i - 1], b = g.drawn[Math.min(i, g.drawn.length - 1)];
+  const ta = g.tArr[i - 1], tb = g.tArr[Math.min(i, g.tArr.length - 1)];
+  const f = tb > ta ? (ph.t_s - ta) / (tb - ta) : 0;
+  return a.clone().lerp(b, Math.min(1, Math.max(0, f)));
+}
+
+// Snap an (x,z) to the nearest drawn vertex so the pin sits ON the route at
+// whatever relief/mode is currently applied, rather than floating at y=0.
+function nearestOnRoute(g, x, z) {
+  let best = g.drawn[0], bd = Infinity;
+  for (const p of g.drawn) {
+    const d = (p.x - x) * (p.x - x) + (p.z - z) * (p.z - z);
+    if (d < bd) { bd = d; best = p; }
+  }
+  return best.clone();
 }
 
 const ROUTE_LIFT = 2; // metres above the slab top, so the line never z-fights
@@ -1515,6 +1607,12 @@ function rebuildGeometry() {
 
   if (g.startDot) g.startDot.position.copy(pts[0]);
   if (g.endDot) g.endDot.position.copy(pts[pts.length - 1]);
+  // Photo pins are anchored to the DRAWN route, which just moved (relief slider
+  // or a mode change), so they have to be rebuilt or they float at stale heights.
+  if (g.photoPins) {
+    disposeObj(g.photoPins);
+    g.photoPins = makePhotoPins(g);
+  }
   setProgress(headT);
 }
 
@@ -1962,7 +2060,42 @@ function applyViewMode(m) {
   if (g.base && g.baseY != null)
     g.base.position.y = isTrack ? 0 : g.baseY;
 
-  document.querySelectorAll('#viewmodes button').forEach(b =>
+  // ---- Photo pins: click one to open it ----
+// Raycast only the pin sprites, and only on a tap that did not drag — an orbit
+// gesture ends with a pointerup over the canvas too.
+const lightbox = document.getElementById('lightbox');
+const rayc = new THREE.Raycaster();
+let downAt = null;
+renderer.domElement.addEventListener('pointerdown', e => { downAt = { x: e.clientX, y: e.clientY }; });
+renderer.domElement.addEventListener('pointerup', e => {
+  if (!downAt) return;
+  const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y);
+  downAt = null;
+  if (moved > 6 || !ride?.photoPins) return;   // that was a drag, not a tap
+  const r = renderer.domElement.getBoundingClientRect();
+  rayc.setFromCamera(new THREE.Vector2(
+    ((e.clientX - r.left) / r.width) * 2 - 1,
+    -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+  const hit = rayc.intersectObjects(ride.photoPins.children, false)
+                  .find(h => h.object.userData.photo);
+  if (hit) openPhoto(hit.object.userData.photo);
+});
+
+function openPhoto(ph) {
+  document.getElementById('lb-img').src = ph.thumb;
+  document.getElementById('lb-when').textContent = ph.takenAt
+    ? new Date(ph.takenAt * 1000).toLocaleString(undefined,
+        { dateStyle: 'medium', timeStyle: 'short' })
+    : '';
+  document.getElementById('lb-where').textContent = ph.hasFix
+    ? `${ph.lat.toFixed(5)}, ${ph.lon.toFixed(5)}`
+    : 'no GPS fix — placed by ride time';
+  lightbox.classList.remove('hide');
+}
+lightbox.addEventListener('click', () => lightbox.classList.add('hide'));
+addEventListener('keydown', e => { if (e.key === 'Escape') lightbox.classList.add('hide'); });
+
+document.querySelectorAll('#viewmodes button').forEach(b =>
     b.classList.toggle('on', b.dataset.mode === viewMode));
 
   if (isTrack) { playing = false; setPlayIcon(); setProgress(1); }
@@ -2310,6 +2443,41 @@ document.getElementById('scrub').addEventListener('input', e => {
   playing = false; setPlayIcon();
   setProgress(Number(e.target.value) / 1000);
 });
+// ---- Photo pins: click one to open it ----
+// Raycast only the pin sprites, and only on a tap that did not drag — an orbit
+// gesture ends with a pointerup over the canvas too.
+const lightbox = document.getElementById('lightbox');
+const rayc = new THREE.Raycaster();
+let downAt = null;
+renderer.domElement.addEventListener('pointerdown', e => { downAt = { x: e.clientX, y: e.clientY }; });
+renderer.domElement.addEventListener('pointerup', e => {
+  if (!downAt) return;
+  const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y);
+  downAt = null;
+  if (moved > 6 || !ride?.photoPins) return;   // that was a drag, not a tap
+  const r = renderer.domElement.getBoundingClientRect();
+  rayc.setFromCamera(new THREE.Vector2(
+    ((e.clientX - r.left) / r.width) * 2 - 1,
+    -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+  const hit = rayc.intersectObjects(ride.photoPins.children, false)
+                  .find(h => h.object.userData.photo);
+  if (hit) openPhoto(hit.object.userData.photo);
+});
+
+function openPhoto(ph) {
+  document.getElementById('lb-img').src = ph.thumb;
+  document.getElementById('lb-when').textContent = ph.takenAt
+    ? new Date(ph.takenAt * 1000).toLocaleString(undefined,
+        { dateStyle: 'medium', timeStyle: 'short' })
+    : '';
+  document.getElementById('lb-where').textContent = ph.hasFix
+    ? `${ph.lat.toFixed(5)}, ${ph.lon.toFixed(5)}`
+    : 'no GPS fix — placed by ride time';
+  lightbox.classList.remove('hide');
+}
+lightbox.addEventListener('click', () => lightbox.classList.add('hide'));
+addEventListener('keydown', e => { if (e.key === 'Escape') lightbox.classList.add('hide'); });
+
 document.querySelectorAll('#viewmodes button').forEach(b =>
   b.addEventListener('click', () => {
     if (!ride) return;
