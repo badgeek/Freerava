@@ -65,9 +65,12 @@
   <div class="w-full px-4 sm:px-6 py-2.5 flex flex-col sm:flex-row sm:items-center sm:flex-wrap gap-2.5 sm:gap-5">
     <div class="flex items-center gap-0 sm:gap-3 min-w-0 shrink-0">
       <span class="hidden sm:block w-[5px] h-[30px] rounded-[3px] shrink-0 bg-gradient-to-b from-accent to-accentd"></span>
-      <div class="min-w-0">
-        <h1 class="text-[14px] sm:text-[15px] font-bold tracking-tight leading-tight m-0 truncate">Ride Viewer</h1>
-        <span id="date" class="block text-muted text-[11px] sm:text-[11.5px] mt-px tabular-nums truncate"></span>
+      <!-- Phone: title and date share one baseline-aligned line — it reads as a
+           headline with its dateline, and buys back a row of header height.
+           Desktop keeps them stacked, where the row layout has space. -->
+      <div class="min-w-0 flex items-baseline gap-2 sm:block">
+        <h1 class="text-[17px] sm:text-[15px] font-bold tracking-tight leading-tight m-0 shrink-0">Ride Viewer</h1>
+        <span id="date" class="block min-w-0 text-muted text-[11px] sm:text-[11.5px] sm:mt-px tabular-nums truncate"></span>
       </div>
     </div>
 
