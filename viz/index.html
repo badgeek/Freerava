@@ -1009,6 +1009,361 @@ function zombieTick(dt) {
   }
 }
 
+// ---- Riot squad roadblocks ------------------------------------------------
+// Third act: a riot squad jogs in from the side of the road and forms a
+// two-row shield wall ACROSS the route ahead of the rider — a roadblock,
+// perpendicular to the direction of travel, at a random spot. The bike does
+// not stop: the officers in its path are flung tumbling, the rest stagger,
+// and the line dissolves once the rider is well past. Tear gas drifts from a
+// canister in front of the wall; striped barricades cap both ends.
+// Same rules as the other acts: fixed pool per ride, nothing allocated in
+// the loop, sizes in bike units, unlit (shaded boxes; the shields are plain
+// translucent planes). Gas + dust go into the meteor smoke pool.
+// The wall is staged by PATH DISTANCE (ride.headDist vs the line's own s),
+// so "the bike reached the wall" is exact on any bend and never depends on
+// a world-space hit test.
+const RIOT = {
+  lines: 2, perRow: 6, rows: 2, // roadblocks in flight at once; officers per row; rows
+  ahead: [60, 100],       // where the next wall forms, ahead of the bike (bike units)
+  every: [4, 8],          // seconds between roadblocks while playing
+  spacing: 4.6, rowGap: 5, // shoulder-to-shoulder spacing; gap between the rows
+  height: 15,             // officer height
+  runIn: 1.2,             // seconds to jog into position
+  hitHalfWidth: 7.5,      // officers this close to the route line get flung
+  fling: [18, 30], flingUp: [12, 20], gravity: 40, // tumble launch (units/s), gravity
+  linger: 80,             // dissolve once the bike is this far past the wall
+  gasEvery: 0.12,         // seconds between tear-gas puffs
+};
+let riotOn = true;
+
+// Hazard stripes for the barricades: diagonal yellow/black on a tiny canvas.
+function stripeTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const x = c.getContext('2d');
+  x.fillStyle = '#e8c229'; x.fillRect(0, 0, 64, 64);
+  x.fillStyle = '#1c1c20';
+  for (let i = -64; i < 128; i += 32) {
+    x.beginPath();
+    x.moveTo(i, 0); x.lineTo(i + 16, 0); x.lineTo(i + 80, 64); x.lineTo(i + 64, 64);
+    x.closePath(); x.fill();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+let _stripeTex = null;
+const stripeTex = () => _stripeTex || (_stripeTex = stripeTexture());
+
+// Position + heading on the drawn route at path distance s (metres of
+// cumD): binary search, then interpolate the drawn (view-mode lifted)
+// points, so a wall stands on whatever surface the bike rides.
+function trackAt(g, s, out) {
+  const D = g.cumD, P = g.drawn;
+  const n = Math.min(D.length, P.length);
+  s = Math.min(D[n - 1], Math.max(0, s));
+  let lo = 1, hi = n - 1;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (D[mid] < s) lo = mid + 1; else hi = mid; }
+  const a = P[lo - 1], b = P[lo];
+  const span = D[lo] - D[lo - 1];
+  const f = span > 1e-9 ? (s - D[lo - 1]) / span : 0;
+  out.pos.copy(a).lerp(b, f);
+  const dx = b.x - a.x, dz = b.z - a.z;
+  if (Math.abs(dx) + Math.abs(dz) > 1e-6) out.yaw = Math.atan2(-dz, dx);
+  return out;
+}
+
+// One officer, facing +X: helmet + visor, navy uniform with a darker vest,
+// baton in the right hand, a translucent shield hung off the left forearm.
+// Legs and arms pivot; the shield is parented to the body so raising it is
+// one rotation, not a chain.
+function makeOfficer(box, shieldGeo, mats) {
+  const root = new THREE.Group();
+  const B = (mat, sx, sy, sz, x, y, z, parent) => {
+    const m = new THREE.Mesh(box, mat);
+    m.scale.set(sx, sy, sz); m.position.set(x, y, z);
+    parent.add(m); return m;
+  };
+  const H = RIOT.height, legH = H * 0.36, torsoH = H * 0.36, headS = H * 0.16;
+  const legL = new THREE.Group(), legR = new THREE.Group();
+  legL.position.set(0, legH, 0.95); legR.position.set(0, legH, -0.95);
+  B(mats.navy, 1.3, legH, 1.3, 0, -legH / 2, 0, legL);
+  B(mats.navy, 1.3, legH, 1.3, 0, -legH / 2, 0, legR);
+  B(mats.black, 1.5, legH * 0.28, 1.5, 0.1, -legH * 0.86, 0, legL); // boots
+  B(mats.black, 1.5, legH * 0.28, 1.5, 0.1, -legH * 0.86, 0, legR);
+  root.add(legL, legR);
+  const body = new THREE.Group(); body.position.y = legH; root.add(body);
+  B(mats.navy, 2.6, torsoH, 3.8, 0, torsoH / 2, 0, body);
+  B(mats.vest, 2.9, torsoH * 0.62, 3.4, 0.1, torsoH * 0.55, 0, body);
+  const head = new THREE.Group();
+  head.position.set(0, torsoH + headS / 2 + 0.1, 0); body.add(head);
+  B(mats.skin, headS, headS, headS, 0, 0, 0, head);
+  B(mats.black, headS * 1.2, headS * 0.85, headS * 1.2, -headS * 0.05, headS * 0.32, 0, head); // helmet
+  B(mats.visor, 0.35, headS * 0.55, headS * 0.95, headS * 0.55, headS * 0.05, 0, head);   // visor
+  const armL = new THREE.Group(), armR = new THREE.Group();
+  const armH = H * 0.32;
+  armL.position.set(0, torsoH * 0.92, 2.25); armR.position.set(0, torsoH * 0.92, -2.25);
+  B(mats.navy, 1.0, armH, 1.0, 0, -armH / 2, 0, armL);
+  B(mats.navy, 1.0, armH, 1.0, 0, -armH / 2, 0, armR);
+  B(mats.black, 0.45, armH * 0.9, 0.45, 0.9, -armH * 0.95, 0, armR); // baton
+  body.add(armL, armR);
+  const shield = new THREE.Mesh(shieldGeo, mats.shield);
+  shield.scale.set(1, H * 0.55, H * 0.36);
+  shield.position.set(1.9, torsoH * 0.35, 0.9);
+  body.add(shield);
+  root.visible = false;
+  return { root, body, head, legL, legR, armL, armR, shield, H, legH,
+           state: 0, t: 0, delay: 0, phase: rnd(0, 6.28), mult: rnd(0.9, 1.1),
+           lx: 0, lz: 0, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, spin: 0 };
+}
+
+// Pose by state. jog: brisk swing, shield down at the side. brace: feet
+// apart, shield raised square to the bike, slight forward lean. stagger:
+// a rocking lean back and forth. Rotations are about local Z (facing +X).
+function poseOfficer(o, jog, shieldUp, lean) {
+  const s = Math.sin(o.phase);
+  o.legL.rotation.z = jog ? s * 0.7 : 0;
+  o.legR.rotation.z = jog ? -s * 0.7 : 0;
+  o.legL.rotation.x = jog ? 0 : 0.16;   // spread for the stance
+  o.legR.rotation.x = jog ? 0 : -0.16;
+  o.body.position.y = o.legH + (jog ? Math.abs(s) * o.H * 0.02 : 0);
+  o.body.rotation.z = -lean;
+  o.armR.rotation.z = jog ? -s * 0.5 : 0.35 + Math.sin(o.phase * 0.3) * 0.05;
+  o.armL.rotation.z = jog ? s * 0.5 : (shieldUp ? 1.2 : 0.2);
+  // Shield: hangs along the flank while jogging, swings square when raised.
+  o.shield.rotation.y = shieldUp ? 0 : Math.PI / 2 * 0.85;
+  o.shield.position.x = shieldUp ? 1.9 : 0.4;
+  o.shield.position.z = shieldUp ? 0.9 : 2.4;
+}
+
+function makeRiotSquad(g) {
+  const grp = new THREE.Group();
+  const box = shadedBoxGeometry();
+  const shieldGeo = new THREE.PlaneGeometry(1, 1);
+  shieldGeo.rotateY(Math.PI / 2); // face +X like the officer
+  const mk = c => new THREE.MeshBasicMaterial({ color: c, vertexColors: true });
+  const mats = { navy: mk(0x2b3350), vest: mk(0x1f2438), skin: mk(0xd9b48f),
+                 black: mk(0x17171b), visor: mk(0xbfd6e8), can: mk(0x5c6068),
+                 stripes: new THREE.MeshBasicMaterial({ map: stripeTex(), vertexColors: true }),
+                 shield: new THREE.MeshBasicMaterial({ color: 0x9ec5e8, transparent: true,
+                   opacity: 0.45, side: THREE.DoubleSide, depthWrite: false }) };
+  const lines = [];
+  for (let i = 0; i < RIOT.lines; i++) {
+    const officers = [];
+    for (let r = 0; r < RIOT.rows; r++) for (let j = 0; j < RIOT.perRow; j++) {
+      const o = makeOfficer(box, shieldGeo, mats);
+      o.slotX = r * RIOT.rowGap;                              // rows stack away from the bike
+      o.slotZ = (j - (RIOT.perRow - 1) / 2) * RIOT.spacing;   // shoulder to shoulder
+      o.rank = j; o.row = r;
+      o.root.scale.setScalar(g.mScale);
+      grp.add(o.root);
+      officers.push(o);
+    }
+    const barricades = [];
+    for (const side of [-1, 1]) {
+      const b = new THREE.Mesh(box, mats.stripes);
+      b.scale.set(1.4, 3, 6).multiplyScalar(g.mScale);
+      b.visible = false;
+      b.slotZ = side * ((RIOT.perRow / 2) * RIOT.spacing + 3.5);
+      grp.add(b); barricades.push(b);
+    }
+    const can = new THREE.Mesh(box, mats.can);
+    can.scale.set(1, 2.2, 1).multiplyScalar(g.mScale);
+    can.visible = false;
+    grp.add(can);
+    lines.push({ live: false, state: 0, t: 0, s: 0, cx: 0, cy: 0, cz: 0, yaw: 0,
+                 fx: 1, fz: 0, rx: 0, rz: 1, side: 1, officers, barricades, can,
+                 canZ: 0, gasIn: 0, pos: new THREE.Vector3() });
+  }
+  scene.add(grp);
+  grp.sim = { u: g.mScale, lines, nextIn: 2.5, cleared: false };
+  return grp;
+}
+
+function gasPuff(g, x, y, z, r) {
+  const pool = g.meteors?.sim?.smoke; if (!pool) return;
+  const u = g.mScale || 1;
+  emitPuff(pool, x, y, z, rnd(-1.2, 1.2) * u, rnd(1, 2) * u, rnd(-1.2, 1.2) * u,
+           rnd(2, 2.8), r, r * 4.5, 4);
+}
+
+const OS = { ENTER: 0, SET: 1, STAGGER: 2, FLUNG: 3, DOWN: 4, LEAVE: 5, SINK: 6, DEAD: 7 };
+const LS = { FORMING: 0, SET: 1, BROKEN: 2, LEAVING: 3 };
+
+function spawnRoadblock(g, sim, ln) {
+  const u = sim.u;
+  ln.s = g.headDist + rnd(RIOT.ahead[0], RIOT.ahead[1]) * u;
+  trackAt(g, ln.s, ln);
+  // Feet on the surface the route is drawn on, not on the lifted line.
+  ln.cx = ln.pos.x; ln.cy = ln.pos.y - ROUTE_LIFT; ln.cz = ln.pos.z;
+  ln.fx = Math.cos(ln.yaw); ln.fz = -Math.sin(ln.yaw);   // route heading
+  ln.rx = -ln.fz; ln.rz = ln.fx;                          // across the route
+  ln.side = Math.random() < 0.5 ? -1 : 1;                 // which kerb they come from
+  ln.live = true; ln.state = LS.FORMING; ln.t = 0; ln.gasIn = 0.3;
+  ln.canZ = rnd(-4, 4);
+  for (const o of ln.officers) {
+    o.state = OS.ENTER; o.t = 0;
+    o.delay = o.rank * 0.07 + o.row * 0.25;
+    o.lx = o.slotX;
+    o.lz = o.slotZ + ln.side * (48 + o.rank * 2 + o.row * 6); // start off the road
+    o.root.rotation.set(0, 0, 0);
+    o.root.visible = true;
+  }
+  for (const b of ln.barricades) b.visible = false;
+  ln.can.visible = false;
+}
+
+// Line-local (lx along the heading, lz across) -> world, onto the object.
+function placeOnLine(ln, u, obj, lx, lz, y) {
+  obj.position.set(ln.cx + (ln.fx * lx + ln.rx * lz) * u, y,
+                   ln.cz + (ln.fz * lx + ln.rz * lz) * u);
+}
+
+function resetRiot(sim) {
+  for (const ln of sim.lines) {
+    ln.live = false;
+    for (const o of ln.officers) { o.root.visible = false; o.state = OS.DEAD; }
+    for (const b of ln.barricades) b.visible = false;
+    ln.can.visible = false;
+  }
+}
+
+function riotTick(dt) {
+  const g = ride, fld = g?.riot; if (!fld) return;
+  const sim = fld.sim;
+  if (!riotOn) {
+    if (!sim.cleared) { resetRiot(sim); sim.cleared = true; }
+    return;
+  }
+  sim.cleared = false;
+  if (!g.drawn || !g.cumD || g.headDist == null) return;
+  const u = sim.u, hd = g.headDist, total = g.cumD[g.cumD.length - 1];
+
+  // Next roadblock: only while playing, only one unpassed wall at a time,
+  // and only where the route still has room for it.
+  if (playing) {
+    sim.nextIn -= dt;
+    if (sim.nextIn <= 0) {
+      sim.nextIn = rnd(RIOT.every[0], RIOT.every[1]);
+      let free = null, pending = false;
+      for (const ln of sim.lines) {
+        if (!ln.live) { free = free || ln; }
+        else if (ln.s > hd) pending = true;
+      }
+      if (free && !pending && hd + (RIOT.ahead[1] + 12) * u < total) spawnRoadblock(g, sim, free);
+    }
+  }
+
+  for (const ln of sim.lines) {
+    if (!ln.live) continue;
+    ln.t += dt;
+    const yawFace = ln.yaw + Math.PI; // square to the oncoming bike
+    // Line state: the bike reaching the wall breaks it; well past, it leaves.
+    if (ln.state < LS.BROKEN && hd >= ln.s - 2 * u) {
+      ln.state = LS.BROKEN; ln.t = 0;
+      for (const o of ln.officers) {
+        if (o.state === OS.DEAD) continue;
+        o.t = 0;
+        if (Math.abs(o.lz) < RIOT.hitHalfWidth) {
+          o.state = OS.FLUNG;
+          const sp = rnd(RIOT.fling[0], RIOT.fling[1]) * u, kick = Math.sign(o.lz || 1) * rnd(3, 9) * u;
+          o.vx = ln.fx * sp + ln.rx * kick; o.vz = ln.fz * sp + ln.rz * kick;
+          o.vy = rnd(RIOT.flingUp[0], RIOT.flingUp[1]) * u;
+          o.spin = rnd(4, 9);
+        } else o.state = OS.STAGGER;
+      }
+    }
+    if (ln.state === LS.BROKEN && hd > ln.s + RIOT.linger * u) {
+      ln.state = LS.LEAVING; ln.t = 0;
+      for (const o of ln.officers) {
+        if (o.state === OS.DEAD) continue;
+        o.t = 0; o.delay = o.rank * 0.05;
+        o.state = (o.state === OS.FLUNG || o.state === OS.DOWN) ? OS.SINK : OS.LEAVE;
+      }
+    }
+    if (ln.state === LS.FORMING && ln.t > RIOT.runIn + 0.6) {
+      ln.state = LS.SET;
+      for (const b of ln.barricades) { placeOnLine(ln, u, b, 0, b.slotZ, ln.cy + 1.5 * u); b.rotation.y = ln.yaw; b.visible = true; }
+      placeOnLine(ln, u, ln.can, -8, ln.canZ, ln.cy + 1.1 * u);
+      ln.can.visible = true;
+    }
+    // Tear gas keeps venting from the canister until the squad leaves.
+    if (ln.state === LS.SET || ln.state === LS.BROKEN) {
+      ln.gasIn -= dt;
+      if (ln.gasIn <= 0) {
+        ln.gasIn = RIOT.gasEvery;
+        gasPuff(g, ln.can.position.x, ln.cy + 2 * u, ln.can.position.z, 2.2 * u);
+      }
+    }
+
+    let alive = 0;
+    for (const o of ln.officers) {
+      if (o.state === OS.DEAD) continue;
+      alive++;
+      o.t += dt;
+      const r = o.root;
+      if (o.state === OS.ENTER) {
+        const k = Math.min(1, Math.max(0, (o.t - o.delay) / RIOT.runIn));
+        const e = k * k * (3 - 2 * k); // ease so they settle, not slam
+        o.lz = o.slotZ + ln.side * (48 + o.rank * 2 + o.row * 6) * (1 - e);
+        o.phase += dt * 13 * o.mult;
+        placeOnLine(ln, u, r, o.lx, o.lz, ln.cy);
+        r.rotation.y = k < 1 ? ln.yaw + (ln.side > 0 ? Math.PI / 2 : -Math.PI / 2) : yawFace;
+        poseOfficer(o, k < 1, false, 0.1);
+        if (k >= 1) { o.state = OS.SET; o.t = 0; }
+      } else if (o.state === OS.SET) {
+        o.phase += dt * 1.5;
+        r.rotation.y = yawFace;
+        poseOfficer(o, false, true, 0.12 + Math.sin(o.phase) * 0.02);
+      } else if (o.state === OS.STAGGER) {
+        const k = Math.min(1, o.t / 0.7);
+        o.phase += dt * 2;
+        poseOfficer(o, false, true, 0.12 - Math.sin(k * Math.PI) * 0.45);
+        if (k >= 1) { o.state = OS.SET; o.t = 0; }
+      } else if (o.state === OS.FLUNG) {
+        // Ballistic tumble down the road, landing on the wall's own ground.
+        r.position.x += o.vx * dt; r.position.z += o.vz * dt;
+        o.vy -= RIOT.gravity * u * dt;
+        r.position.y += o.vy * dt;
+        r.rotation.z -= o.spin * dt;
+        poseOfficer(o, true, false, 0);
+        if (r.position.y <= ln.cy && o.vy < 0) {
+          r.position.y = ln.cy;
+          r.rotation.z = -Math.PI / 2 + rnd(-0.2, 0.2); // face down on the tarmac
+          r.rotation.y = yawFace + rnd(-0.6, 0.6);
+          o.state = OS.DOWN; o.t = 0;
+          dustPuff(g, r.position.x, ln.cy, r.position.z, 2.5 * u, 4);
+        }
+      } else if (o.state === OS.DOWN) {
+        // lies there
+      } else if (o.state === OS.LEAVE) {
+        const k = Math.min(1, Math.max(0, (o.t - o.delay) / RIOT.runIn));
+        o.lz = o.slotZ + ln.side * 60 * k;
+        o.phase += dt * 13 * o.mult;
+        placeOnLine(ln, u, r, o.lx, o.lz, ln.cy);
+        r.rotation.y = ln.yaw + (ln.side > 0 ? -Math.PI / 2 : Math.PI / 2);
+        poseOfficer(o, true, false, 0.1);
+        if (k >= 1) { o.state = OS.DEAD; r.visible = false; }
+      } else if (o.state === OS.SINK) {
+        const k = Math.min(1, o.t / 1.0);
+        r.position.y = ln.cy - o.H * u * k;
+        if (k >= 1) { o.state = OS.DEAD; r.visible = false; r.rotation.set(0, 0, 0); }
+      }
+    }
+    if (ln.state === LS.LEAVING) {
+      // Barricades and the canister sink with the downed officers.
+      const k = Math.min(1, ln.t / 1.0);
+      for (const b of ln.barricades) b.position.y = ln.cy + 1.5 * u - 5 * u * k;
+      ln.can.position.y = ln.cy + 1.1 * u - 4 * u * k;
+      if (alive === 0) {
+        ln.live = false;
+        for (const b of ln.barricades) b.visible = false;
+        ln.can.visible = false;
+      }
+    }
+  }
+}
+
 function buildRide(gj) {
   clearRide();
   const feat = (gj.features || []).find(f => f.geometry?.type === 'LineString');
