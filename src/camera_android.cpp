@@ -145,26 +145,43 @@ std::string camera_id_for(ACameraManager *mgr, Lens lens) {
     return found;
 }
 
-// Largest advertised JPEG size, capped so a 48 MP sensor doesn't hand back a
-// 20 MB file we then have to thumbnail anyway.
+// Pick the JPEG size to shoot at: the largest 4:3 mode under a resolution cap.
+//
+// Aspect is chosen BEFORE pixel count on purpose. Ranking by pixels alone made
+// the Redmi's rear lens shoot 2992x2992 — a square mode that genuinely has more
+// pixels than any 4:3 option under the cap, but throws away the width you
+// actually want for scenery. The cap keeps a big sensor from handing back a
+// 20 MB file we would only thumbnail anyway.
 void best_jpeg_size(ACameraManager *mgr, const std::string &id, int *w, int *h) {
-    *w = 1280; *h = 960; // safe default if the query fails
+    *w = 1280; *h = 960; // safe 4:3 default if the query fails
     ACameraMetadata *meta = nullptr;
     if (ACameraManager_getCameraCharacteristics(mgr, id.c_str(), &meta) != ACAMERA_OK)
         return;
     ACameraMetadata_const_entry e{};
     if (ACameraMetadata_getConstEntry(
             meta, ACAMERA_SCALER_AVAILABLE_STREAM_CONFIGURATIONS, &e) == ACAMERA_OK) {
-        long bestPx = 0;
+        long bestPx = 0, bestAnyPx = 0;
+        int anyW = 0, anyH = 0;
         for (uint32_t i = 0; i + 3 < e.count; i += 4) {
             if (e.data.i32[i] != AIMAGE_FORMAT_JPEG) continue;
             if (e.data.i32[i + 3] != ACAMERA_SCALER_AVAILABLE_STREAM_CONFIGURATIONS_OUTPUT)
                 continue;
             const int cw = e.data.i32[i + 1], ch = e.data.i32[i + 2];
+            if (cw <= 0 || ch <= 0) continue;
+            if (cw > 3000 || ch > 3000) continue;
             const long px = (long)cw * ch;
-            if (cw > 3000 || ch > 3000) continue; // cap: plenty for a ride selfie
-            if (px > bestPx) { bestPx = px; *w = cw; *h = ch; }
+
+            // 4:3 either way up — some HALs advertise portrait modes.
+            const double ar = cw >= ch ? (double)cw / ch : (double)ch / cw;
+            if (ar > 1.27 && ar < 1.40) {
+                if (px > bestPx) { bestPx = px; *w = cw; *h = ch; }
+            } else if (px > bestAnyPx) {
+                bestAnyPx = px; anyW = cw; anyH = ch;
+            }
         }
+        // Nothing 4:3 on this lens: rather than fail, take the biggest thing it
+        // does offer.
+        if (!bestPx && bestAnyPx) { *w = anyW; *h = anyH; }
     }
     ACameraMetadata_free(meta);
 }
