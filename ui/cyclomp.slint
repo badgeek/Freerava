@@ -662,40 +662,48 @@ export component AppWindow inherits Window {
 
             Rectangle { height: 10px; background: Palette.ink; }
 
-            // ---- Ride controls: START / PAUSE+STOP / RESUME+STOP ----
-            HorizontalLayout {
-                height: 58px;
+            // ---- Ride controls, two rows: ride state on top (START, or
+            // HOLD/RESUME + TERMINATE), capture (PHOTO / SELFIE) below. ----
+            VerticalLayout {
                 spacing: 8px;
-                if root.ride-state == 0 : TermButton {
-                    horizontal-stretch: 1;
-                    label: "ENGAGE RIDE";
-                    pressed => { root.toggle-ride(); }
-                }
-                if root.ride-state != 0 : TermButton {
-                    horizontal-stretch: 1;
-                    label: root.ride-state == 1 ? "HOLD" : "RESUME";
-                    tint: root.ride-state == 1 ? Palette.amber : Palette.phos;
-                    pressed => { root.toggle-ride(); }
-                }
-                if root.ride-state != 0 : TermButton {
-                    horizontal-stretch: 1;
-                    label: "TERMINATE";
-                    tint: Palette.red;
-                    pressed => { root.stop-ride(); }
+                HorizontalLayout {
+                    height: 58px;
+                    spacing: 8px;
+                    if root.ride-state == 0 : TermButton {
+                        horizontal-stretch: 1;
+                        label: "ENGAGE RIDE";
+                        pressed => { root.toggle-ride(); }
+                    }
+                    if root.ride-state != 0 : TermButton {
+                        horizontal-stretch: 1;
+                        label: root.ride-state == 1 ? "HOLD" : "RESUME";
+                        tint: root.ride-state == 1 ? Palette.amber : Palette.phos;
+                        pressed => { root.toggle-ride(); }
+                    }
+                    if root.ride-state != 0 : TermButton {
+                        horizontal-stretch: 1;
+                        label: "TERMINATE";
+                        tint: Palette.red;
+                        pressed => { root.stop-ride(); }
+                    }
                 }
                 // Ride photos. Deliberately wide, fixed targets: you tap these
                 // without looking. Each is hidden where that lens is absent.
-                if root.rear-camera-available : TermButton {
-                    width: 84px;
-                    label: "PHOTO";
-                    tint: Palette.amber;
-                    pressed => { root.take-photo(false); }
-                }
-                if root.camera-available : TermButton {
-                    width: 84px;
-                    label: "SELFIE";
-                    tint: Palette.cyan;
-                    pressed => { root.take-photo(true); }
+                HorizontalLayout {
+                    height: 58px;
+                    spacing: 8px;
+                    if root.rear-camera-available : TermButton {
+                        horizontal-stretch: 1;
+                        label: "PHOTO";
+                        tint: Palette.amber;
+                        pressed => { root.take-photo(false); }
+                    }
+                    if root.camera-available : TermButton {
+                        horizontal-stretch: 1;
+                        label: "SELFIE";
+                        tint: Palette.cyan;
+                        pressed => { root.take-photo(true); }
+                    }
                 }
             }
             // Capture feedback — the only thing there is to see, since the
