@@ -449,15 +449,16 @@ int main(int, char **)
         auto &w = **u;
         const auto &rows = log->newest_first();
         if (i < 0 || (size_t)i >= rows.size()) return;
-        w.set_sel_speed_path(
-            slint::SharedString(core::speed_sparkline_path(rows[i].track, 300, 70)));
-        w.set_sel_track_path(
-            slint::SharedString(core::track_shape_path(rows[i].track, 300, 120)));
+        // 300x200 viewbox: the charts now split the tab's full height, and a
+        // 300x70 one stretched into that box exaggerated every spike.
+        w.set_sel_speed_path(slint::SharedString(
+            core::speed_sparkline_path(rows[i].track, 300, 200)));
         w.set_sel_elev_path(slint::SharedString(
-            core::elevation_profile_path(rows[i].track, 300, 70)));
+            core::elevation_profile_path(rows[i].track, 300, 200)));
+        // Value only ("+49 m"); the UI supplies the "ELEV" prefix, so the same
+        // string serves both the chart caption and the PERFORMANCE grid cell.
         w.set_sel_elev_label(slint::SharedString(
-            "ELEV +" + core::fmt::fmt0(core::elevation_gain_m(rows[i].track)) +
-            " m"));
+            "+" + core::fmt::fmt0(core::elevation_gain_m(rows[i].track)) + " m"));
         w.set_selected_session(i);
         w.set_detail_tab(0);
         w.set_replay_playing(false);
