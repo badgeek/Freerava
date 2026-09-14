@@ -39,11 +39,15 @@ public:
 
     // ---- Finished sessions ----
     // One session + its track in a single transaction (atomic; a crash can't
-    // leave a half-written row the way the text store could).
-    bool add_session(const SessionSummary &s);
+    // leave a half-written row the way the text store could). On success `s.id`
+    // is set to the new rowid so the caller can delete it later.
+    bool add_session(SessionSummary &s);
     // Rebuilds `out` newest-first (matches SessionLog's own ordering).
     bool load_all(SessionLog &out) const;
     long session_count() const;
+    // Drop one stored session and its trackpoints. True when a row went away;
+    // false if `id` matched nothing (already deleted, or never persisted).
+    bool delete_session(long long id);
 
     // ---- In-progress ride (single slot) ----
     bool save_active(const ActiveRide &a);

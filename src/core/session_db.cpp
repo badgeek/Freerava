@@ -64,10 +64,11 @@ void SessionStore::close() {
     }
 }
 
-bool SessionStore::add_session(const SessionSummary &s) {
+bool SessionStore::add_session(SessionSummary &s) {
     if (!db_) return false;
     if (!exec("BEGIN")) return false;
     bool okv = true;
+    sqlite3_int64 sid = 0;
 
     sqlite3_stmt *st = nullptr;
     if (sqlite3_prepare_v2(db_,
@@ -85,13 +86,13 @@ bool SessionStore::add_session(const SessionSummary &s) {
         sqlite3_bind_int(st, 8, s.avg_hr);
         sqlite3_bind_int(st, 9, s.has_hr ? 1 : 0);
         okv = sqlite3_step(st) == SQLITE_DONE;
+        if (okv) sid = sqlite3_last_insert_rowid(db_);
         sqlite3_finalize(st);
     } else {
         okv = false;
     }
 
     if (okv && !s.track.empty()) {
-        sqlite3_int64 sid = sqlite3_last_insert_rowid(db_);
         sqlite3_stmt *tp = nullptr;
         if (sqlite3_prepare_v2(db_,
                                "INSERT INTO trackpoint(session_id,seq,lat,lon,"
@@ -116,7 +117,42 @@ bool SessionStore::add_session(const SessionSummary &s) {
     }
 
     exec(okv ? "COMMIT" : "ROLLBACK");
+    if (okv) s.id = (long long)sid;
     return okv;
+}
+
+bool SessionStore::delete_session(long long id) {
+    if (!db_ || id <= 0) return false;
+    if (!exec("BEGIN")) return false;
+    bool okv = true;
+    int removed = 0;
+
+    sqlite3_stmt *st = nullptr;
+    if (sqlite3_prepare_v2(db_, "DELETE FROM session WHERE id=?", -1, &st,
+                           nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(st, 1, (sqlite3_int64)id);
+        okv = sqlite3_step(st) == SQLITE_DONE;
+        sqlite3_finalize(st);
+        if (okv) removed = sqlite3_changes(db_);
+    } else {
+        okv = false;
+    }
+
+    // No foreign keys in the schema, so the track goes with it by hand.
+    if (okv) {
+        sqlite3_stmt *tp = nullptr;
+        if (sqlite3_prepare_v2(db_, "DELETE FROM trackpoint WHERE session_id=?",
+                               -1, &tp, nullptr) == SQLITE_OK) {
+            sqlite3_bind_int64(tp, 1, (sqlite3_int64)id);
+            okv = sqlite3_step(tp) == SQLITE_DONE;
+            sqlite3_finalize(tp);
+        } else {
+            okv = false;
+        }
+    }
+
+    exec(okv ? "COMMIT" : "ROLLBACK");
+    return okv && removed > 0;
 }
 
 bool SessionStore::load_all(SessionLog &out) const {
@@ -139,6 +175,7 @@ bool SessionStore::load_all(SessionLog &out) const {
     while (sqlite3_step(st) == SQLITE_ROW) {
         SessionSummary s;
         sqlite3_int64 id = sqlite3_column_int64(st, 0);
+        s.id = (long long)id;
         s.ended_at = (std::time_t)sqlite3_column_int64(st, 1);
         s.dist_km = sqlite3_column_double(st, 2);
         s.moving_s = sqlite3_column_double(st, 3);
@@ -309,7 +346,8 @@ long SessionStore::import_text_log(const std::string &sessions_txt_path) {
     long n = 0;
     // Oldest first so ids ascend with time (rows is newest-first).
     for (auto it = rows.rbegin(); it != rows.rend(); ++it) {
-        if (add_session(*it)) ++n;
+        SessionSummary s = *it; // add_session stamps the new rowid onto it
+        if (add_session(s)) ++n;
     }
     return n;
 }

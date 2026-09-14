@@ -6,6 +6,7 @@
 #include "core/telemetry.h"
 #include "core/track.h"
 
+#include <cstddef>
 #include <ctime>
 #include <optional>
 #include <vector>
@@ -27,6 +28,9 @@ struct LiveStats {
 
 // Typed summary — numbers and a timestamp; strings are a UI concern.
 struct SessionSummary {
+    // SQLite rowid once stored; 0 while the ride is still only in memory.
+    // Deleting goes by this, never by list position.
+    long long id = 0;
     std::time_t ended_at = 0;
     double dist_km = 0;
     double moving_s = 0;
@@ -84,6 +88,12 @@ class SessionLog {
 public:
     void add(const SessionSummary &s) { rows_.insert(rows_.begin(), s); }
     const std::vector<SessionSummary> &newest_first() const { return rows_; }
+    // Drop one entry by its newest-first position. Out-of-range is a no-op.
+    bool remove(size_t i) {
+        if (i >= rows_.size()) return false;
+        rows_.erase(rows_.begin() + (std::ptrdiff_t)i);
+        return true;
+    }
 
 private:
     std::vector<SessionSummary> rows_;

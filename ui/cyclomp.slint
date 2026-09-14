@@ -396,6 +396,7 @@ export component AppWindow inherits Window {
     in property <float> ep-end-ny;
     in property <string> export-status;           // transient EXPORT feedback
     callback export-ride();                        // write this ride to GeoJSON
+    callback purge-ride();     // delete this sortie for good (already confirmed)
     callback detail-back();
     callback detail-map-shown();  // MAP tab opened: fit camera to the track
     callback replay-toggle();
@@ -1078,6 +1079,9 @@ export component AppWindow inherits Window {
         if root.screen == 3 : detail := VerticalLayout {
             vertical-stretch: 1;
             property <SessionRow> cur: root.sessions[root.selected-session];
+            // First PURGE tap arms, second one deletes. Lives on `detail`, so
+            // it resets by itself every time this page is opened.
+            property <bool> purge-armed: false;
 
             // header: back + date + headline stats
             Rectangle {
@@ -1162,17 +1166,30 @@ export component AppWindow inherits Window {
                         vertical-alignment: center;
                     }
                     Rectangle { horizontal-stretch: 1; }
+                }
+            }
+            // Record actions. Own row: the stats plus two buttons overflow a
+            // single 393px-wide strip, which clipped PURGE off the screen.
+            Rectangle {
+                height: 36px;
+                background: Palette.ink;
+                HorizontalLayout {
+                    padding-left: 16px;
+                    padding-right: 16px;
+                    spacing: 10px;
                     Text {
+                        horizontal-stretch: 1;
                         text: root.export-status;
                         color: Palette.dim;
                         font-size: 10px;
                         font-weight: 700;
                         vertical-alignment: center;
+                        overflow: elide;
                     }
                     Rectangle {
                         width: 88px;
-                        y: 4px;
-                        height: 24px;
+                        y: 5px;
+                        height: 26px;
                         background: xa.pressed ? Palette.phos : transparent;
                         border-width: 1px;
                         border-color: Palette.phos;
@@ -1180,6 +1197,35 @@ export component AppWindow inherits Window {
                         Text {
                             text: "EXPORT";
                             color: xa.pressed ? Palette.ink : Palette.phos;
+                            font-size: 11px;
+                            font-weight: 900;
+                            letter-spacing: 1px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                    // Destructive, so it arms first: PURGE -> CONFIRM -> gone.
+                    Rectangle {
+                        width: 88px;
+                        y: 5px;
+                        height: 26px;
+                        background: pa.pressed || detail.purge-armed
+                                        ? Palette.red : transparent;
+                        border-width: 1px;
+                        border-color: Palette.red;
+                        pa := TouchArea {
+                            clicked => {
+                                if (detail.purge-armed) {
+                                    root.purge-ride();
+                                } else {
+                                    detail.purge-armed = true;
+                                }
+                            }
+                        }
+                        Text {
+                            text: detail.purge-armed ? "CONFIRM" : "PURGE";
+                            color: pa.pressed || detail.purge-armed
+                                       ? Palette.ink : Palette.red;
                             font-size: 11px;
                             font-weight: 900;
                             letter-spacing: 1px;

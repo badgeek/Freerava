@@ -716,6 +716,33 @@ int main(int, char **)
         }
     });
 
+    // Delete the selected sortie, for good. The UI already armed and confirmed
+    // (PURGE -> CONFIRM), so this does not second-guess the tap.
+    ui->on_purge_ride([ui = slint::ComponentWeakHandle(ui), log, sessions,
+                       store] {
+        auto u = ui.lock();
+        if (!u) return;
+        int i = (*u)->get_selected_session();
+        const auto &rows = log->newest_first();
+        if (i < 0 || (size_t)i >= rows.size()) return;
+        long long id = rows[i].id; // 0 when it was never persisted
+        // Same hop as on_select_session: we are inside the PURGE button's own
+        // pointer-event dispatch, and both leaving the page and shrinking the
+        // model destroy the element we were clicked from. Do it next turn.
+        slint::invoke_from_event_loop([ui, i, id, log, sessions, store] {
+            auto u = ui.lock();
+            if (!u) return;
+            auto &w = **u;
+            if ((size_t)i >= log->newest_first().size()) return;
+            w.invoke_detail_back();     // replay/marker teardown + back to LOG
+            w.set_selected_session(-1); // the index is about to move
+            if (store->ok()) store->delete_session(id);
+            log->remove((size_t)i);
+            sessions->erase((size_t)i);
+            if (!store->ok()) core::save_sessions(sessions_path(), *log);
+        });
+    });
+
     // Leave the detail page: stop the replay, hand the marker back to the
     // live rider.
     ui->on_detail_back([ui = slint::ComponentWeakHandle(ui), replay_active,
@@ -1045,12 +1072,13 @@ int main(int, char **)
             if (engine->state() == core::RideState::Idle) return;
             if (auto s = engine->stop(std::time(nullptr))) {
                 s->track = recorder->points();
-                log->add(*s);
-                sessions->insert(0, to_row(*s)); // newest first
+                // Store first: add_session stamps the new rowid onto `s`, and
+                // the log's copy needs it to be purgeable without a restart.
                 if (store->ok())
                     store->add_session(*s); // atomic append, no full rewrite
-                else
-                    core::save_sessions(sessions_path(), *log);
+                log->add(*s);
+                sessions->insert(0, to_row(*s)); // newest first
+                if (!store->ok()) core::save_sessions(sessions_path(), *log);
             }
             if (store->ok()) store->clear_active(); // ride finished
             publish_idle(w, sensors);

@@ -35,15 +35,22 @@ SessionSummary make_session(std::time_t ended, double dist, int npts) {
                            (float)(i * 5), (float)(20 + i)});
     return s;
 }
+
+// add_session() takes a mutable reference (it stamps the new rowid onto the
+// summary), so it needs a named local rather than a temporary. Returns the id.
+long long add(SessionStore &db, std::time_t ended, double dist, int npts) {
+    SessionSummary s = make_session(ended, dist, npts);
+    return db.add_session(s) ? s.id : 0;
+}
 } // namespace
 
 TEST_CASE("SessionStore round-trips sessions newest-first") {
     SessionStore db;
     REQUIRE(db.open(tmp_db()));
 
-    db.add_session(make_session(1000, 3.0, 3));
-    db.add_session(make_session(2000, 5.0, 4));
-    db.add_session(make_session(1500, 4.0, 0)); // no track
+    add(db, 1000, 3.0, 3);
+    add(db, 2000, 5.0, 4);
+    add(db, 1500, 4.0, 0); // no track
 
     CHECK(db.session_count() == 3);
 
@@ -62,6 +69,52 @@ TEST_CASE("SessionStore round-trips sessions newest-first") {
     CHECK(rows[1].track.empty());
     CHECK(rows[2].track.size() == 3);
     CHECK(rows[2].track[0].alt_m == doctest::Approx(20.0));
+    // Every loaded row carries the rowid the UI deletes by.
+    CHECK(rows[0].id > 0);
+    CHECK(rows[1].id != rows[0].id);
+}
+
+TEST_CASE("SessionStore deletes one session and its track") {
+    SessionStore db;
+    REQUIRE(db.open(tmp_db()));
+
+    long long keep_old = add(db, 1000, 3.0, 3);
+    long long doomed = add(db, 2000, 5.0, 4);
+    long long keep_mid = add(db, 1500, 4.0, 0);
+    REQUIRE(doomed > 0);
+    CHECK(db.session_count() == 3);
+
+    CHECK(db.delete_session(doomed));
+    CHECK(db.session_count() == 2);
+
+    SessionLog log;
+    REQUIRE(db.load_all(log));
+    const auto &rows = log.newest_first();
+    REQUIRE(rows.size() == 2);
+    CHECK(rows[0].id == keep_mid); // ended_at 1500
+    CHECK(rows[1].id == keep_old); // ended_at 1000
+    // The neighbours' tracks are untouched.
+    CHECK(rows[1].track.size() == 3);
+
+    // Deleting again, or an id that never existed, reports "nothing removed"
+    // instead of silently succeeding.
+    CHECK_FALSE(db.delete_session(doomed));
+    CHECK_FALSE(db.delete_session(99999));
+    CHECK_FALSE(db.delete_session(0));
+    CHECK(db.session_count() == 2);
+}
+
+TEST_CASE("SessionLog::remove drops the right row") {
+    SessionLog log;
+    log.add(make_session(1000, 3.0, 0)); // becomes index 1 after the next add
+    log.add(make_session(2000, 5.0, 0)); // newest -> index 0
+
+    CHECK(log.remove(0));
+    REQUIRE(log.newest_first().size() == 1);
+    CHECK(log.newest_first()[0].ended_at == 1000);
+
+    CHECK_FALSE(log.remove(5)); // out of range is a no-op
+    CHECK(log.newest_first().size() == 1);
 }
 
 TEST_CASE("SessionStore active ride save / load / clear") {
