@@ -119,6 +119,9 @@
   <button id="follow"
     class="pill text-[12.5px] font-semibold text-muted border border-bd rounded-full px-[13px] py-[7px]
            whitespace-nowrap transition hover:border-faint hover:text-ink">Chase cam</button>
+  <button id="meteors" title="Meteor shower ahead of the rider"
+    class="pill on text-[12.5px] font-semibold text-muted border border-bd rounded-full px-[13px] py-[7px]
+           whitespace-nowrap transition hover:border-faint hover:text-ink">Meteors</button>
   <span id="reliefctl" class="flex items-center gap-[7px] text-muted text-[11.5px] font-semibold uppercase tracking-wide whitespace-nowrap">
     Relief <input id="exag" type="range" min="0" max="40" value="12" class="w-20" /></span>
 </div>
@@ -308,7 +311,8 @@ function clearRide() {
   if (!ride) return;
   for (const o of [ride.route, ride.curtain, ride.head, ride.startDot,
                    ride.endDot, ride.terrain, ride.wire, ride.skirt, ride.cap,
-                   ride.shadow, ride.base, ride.detail, ride.slab])
+                   ride.shadow, ride.base, ride.detail, ride.slab,
+                   ride.meteors])
     disposeObj(o);
   grid.visible = true;
   document.getElementById('attrib').style.display = 'none';
@@ -404,6 +408,325 @@ function makeBike() {
   return g;
 }
 
+// ---- Meteor shower --------------------------------------------------------
+// Apocalypse garnish: small low-poly rocks rain down AHEAD of the bike, each
+// dragging a fire trail and leaving smoke, as if the rider is outrunning a
+// disaster. Everything is a fixed pool built once per ride and recycled —
+// nothing is allocated inside the frame loop. Unlit like the rest of the
+// scene: the rock's facets are baked into vertex colours, fire and smoke are
+// point sprites coloured on the CPU. NB the fire is alpha-blended, not
+// additive: additive light on this near-white sky/paper map just saturates
+// to white and vanishes.
+// Every distance here is in bike units (ride.mScale), so the effect reads
+// the same on a city loop and on a 40 km ride.
+const METEOR = {
+  pool: 7,               // rocks airborne at once (hard cap)
+  rate: 1.6,             // spawns per second while playing
+  idleRate: 0.3,         // ... while paused: a drizzle keeps the scene alive
+  ahead: [22, 75],       // impact distance ahead of the bike (bike units)
+  lateral: 32,           // +/- sideways scatter of the impact point
+  height: 110,           // entry altitude above the impact point
+  fallTime: [1.1, 1.7],  // seconds from entry to impact
+  rock: [1.3, 2.6],      // rock radius range (bike wheel radius is 4)
+  fireStep: 2.4,         // one fire sprite every N units of travel...
+  fireLife: 0.34,        // ...alive this long: trail length = speed x life
+  smokeStep: 5.5,
+  smokeLife: 1.5,
+  fireCap: 256, smokeCap: 320, // ring buffers; the oldest puff is overwritten
+};
+let meteorsOn = true;
+
+// Soft round sprite. Fire gets a solid hot core with a quick falloff, smoke a
+// gentle one all the way out. Alpha-only: the colour comes per particle.
+function puffTexture(hard) {
+  const s = 64;
+  const c = document.createElement('canvas');
+  c.width = c.height = s;
+  const x = c.getContext('2d');
+  const grad = x.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+  if (hard) {
+    grad.addColorStop(0.00, 'rgba(255,255,255,1)');
+    grad.addColorStop(0.25, 'rgba(255,255,255,0.85)');
+    grad.addColorStop(0.60, 'rgba(255,255,255,0.25)');
+    grad.addColorStop(1.00, 'rgba(255,255,255,0)');
+  } else {
+    grad.addColorStop(0.00, 'rgba(255,255,255,0.7)');
+    grad.addColorStop(0.50, 'rgba(255,255,255,0.3)');
+    grad.addColorStop(1.00, 'rgba(255,255,255,0)');
+  }
+  x.fillStyle = grad; x.fillRect(0, 0, s, s);
+  return new THREE.CanvasTexture(c);
+}
+let _fireTex = null, _smokeTex = null;
+const fireTex = () => _fireTex || (_fireTex = puffTexture(true));
+const smokeTex = () => _smokeTex || (_smokeTex = puffTexture(false));
+
+// Point sprites with a per-particle world size. PointsMaterial's size is
+// per-material, so a tiny shader instead: aSize is a WORLD diameter, and
+// uScale (set in resize) turns it into device pixels at 1 m — the fov is
+// folded in, which three's own scale uniform ignores. Capped because some
+// GPUs clamp gl_PointSize hard and a close smoke puff would otherwise pop.
+const meteorScale = { value: 1 };
+const PUFF_VS = `
+  attribute float aSize; attribute vec3 aColor; attribute float aAlpha;
+  uniform float uScale;
+  varying vec3 vColor; varying float vAlpha;
+  void main() {
+    vColor = aColor; vAlpha = aAlpha;
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    gl_PointSize = min(384.0, aSize * uScale / max(1.0, -mv.z));
+    gl_Position = projectionMatrix * mv;
+  }`;
+const PUFF_FS = `
+  uniform sampler2D uMap;
+  varying vec3 vColor; varying float vAlpha;
+  void main() {
+    float a = texture2D(uMap, gl_PointCoord).a * vAlpha;
+    if (a < 0.004) discard;
+    gl_FragColor = vec4(vColor, a);
+  }`;
+
+// A ring buffer of sprites. Parallel typed arrays hold the simulation state;
+// dead particles simply have size 0 (age >= life), so no compaction is
+// needed and the draw call never changes shape.
+function makePuffPool(cap, map) {
+  const geo = new THREE.BufferGeometry();
+  const pos = new Float32Array(cap * 3), col = new Float32Array(cap * 3);
+  const size = new Float32Array(cap), alpha = new Float32Array(cap);
+  const dyn = a => a.setUsage(THREE.DynamicDrawUsage);
+  geo.setAttribute('position', dyn(new THREE.BufferAttribute(pos, 3)));
+  geo.setAttribute('aColor', dyn(new THREE.BufferAttribute(col, 3)));
+  geo.setAttribute('aSize', dyn(new THREE.BufferAttribute(size, 1)));
+  geo.setAttribute('aAlpha', dyn(new THREE.BufferAttribute(alpha, 1)));
+  const mat = new THREE.ShaderMaterial({
+    vertexShader: PUFF_VS, fragmentShader: PUFF_FS,
+    uniforms: { uMap: { value: map }, uScale: meteorScale },
+    transparent: true, depthWrite: false, blending: THREE.NormalBlending });
+  const points = new THREE.Points(geo, mat);
+  points.frustumCulled = false; // the bounding sphere would be stale every frame
+  points.renderOrder = 3;       // over the curtain and the detail patch
+  return { points, geo, cap, head: 0, pos, col, size, alpha,
+           age: new Float32Array(cap), life: new Float32Array(cap),
+           vel: new Float32Array(cap * 3), s0: new Float32Array(cap),
+           s1: new Float32Array(cap), kind: new Uint8Array(cap) };
+}
+function emitPuff(p, x, y, z, vx, vy, vz, life, s0, s1, kind) {
+  const i = p.head; p.head = (p.head + 1) % p.cap;
+  p.pos[i * 3] = x; p.pos[i * 3 + 1] = y; p.pos[i * 3 + 2] = z;
+  p.vel[i * 3] = vx; p.vel[i * 3 + 1] = vy; p.vel[i * 3 + 2] = vz;
+  p.age[i] = 0; p.life[i] = life; p.s0[i] = s0; p.s1[i] = s1; p.kind[i] = kind;
+}
+// Colour ramps by particle kind, k = 0..1 through its life. Written straight
+// into the attribute (sRGB-ish values: the shader does no conversion).
+const lerp3 = (out, i, a, b, k) => {
+  out[i] = a[0] + (b[0] - a[0]) * k;
+  out[i + 1] = a[1] + (b[1] - a[1]) * k;
+  out[i + 2] = a[2] + (b[2] - a[2]) * k;
+};
+const RAMP = {
+  fireHot: [1.0, 0.92, 0.55], fireMid: [1.0, 0.42, 0.05], fireEnd: [0.5, 0.08, 0.02],
+  flashA: [1.0, 0.95, 0.70], flashB: [1.0, 0.40, 0.05],
+  smokeA: [0.38, 0.36, 0.40], smokeB: [0.66, 0.65, 0.68],
+  dustA: [0.55, 0.48, 0.42], dustB: [0.74, 0.70, 0.66],
+};
+function puffColor(p, i, kind, k) {
+  const c = i * 3;
+  if (kind === 0) {        // fire trail: hot core -> orange -> deep red, dies fast
+    if (k < 0.3) lerp3(p.col, c, RAMP.fireHot, RAMP.fireMid, k / 0.3);
+    else lerp3(p.col, c, RAMP.fireMid, RAMP.fireEnd, (k - 0.3) / 0.7);
+    p.alpha[i] = 0.95 * (1 - k);
+  } else if (kind === 1) { // impact flash
+    lerp3(p.col, c, RAMP.flashA, RAMP.flashB, k);
+    p.alpha[i] = 0.9 * (1 - k) * (1 - k);
+  } else if (kind === 2) { // smoke: fades in quick, lingers, thins out
+    lerp3(p.col, c, RAMP.smokeA, RAMP.smokeB, k);
+    p.alpha[i] = 0.45 * Math.min(1, k * 6) * (1 - k);
+  } else {                 // ground dust
+    lerp3(p.col, c, RAMP.dustA, RAMP.dustB, k);
+    p.alpha[i] = 0.5 * (1 - k);
+  }
+}
+function updatePuffs(p, dt) {
+  for (let i = 0; i < p.cap; i++) {
+    if (p.age[i] >= p.life[i]) { p.size[i] = 0; p.alpha[i] = 0; continue; }
+    p.age[i] += dt;
+    const k = Math.min(1, p.age[i] / p.life[i]);
+    p.pos[i * 3] += p.vel[i * 3] * dt;
+    p.pos[i * 3 + 1] += p.vel[i * 3 + 1] * dt;
+    p.pos[i * 3 + 2] += p.vel[i * 3 + 2] * dt;
+    p.size[i] = p.s0[i] + (p.s1[i] - p.s0[i]) * k;
+    puffColor(p, i, p.kind[i], k);
+  }
+  for (const a of ['position', 'aColor', 'aSize', 'aAlpha'])
+    p.geo.attributes[a].needsUpdate = true;
+}
+
+// Chunky rock: a plain icosahedron (12 facets, non-indexed so every face owns
+// its vertices) with the shading baked into vertex colours — a key-light
+// term for form, plus an orange bloom on faces pointing down, the side that
+// ploughs through the air. It tumbles, so the glow flickers across facets,
+// which happens to read as heat.
+function rockGeometry() {
+  const geo = new THREE.IcosahedronGeometry(1, 0);
+  const n = geo.attributes.normal, col = new Float32Array(n.count * 3);
+  const L = new THREE.Vector3(0.4, 0.85, 0.3).normalize();
+  const dark = new THREE.Color(0x2e2a30), lit = new THREE.Color(0x76696e);
+  const hot = new THREE.Color(COL.accent);
+  const tmp = new THREE.Color(), nv = new THREE.Vector3();
+  for (let i = 0; i < n.count; i++) {
+    nv.set(n.getX(i), n.getY(i), n.getZ(i));
+    tmp.copy(dark).lerp(lit, Math.max(0, nv.dot(L)));
+    tmp.lerp(hot, Math.max(0, -nv.y) * 0.6);
+    col[i * 3] = tmp.r; col[i * 3 + 1] = tmp.g; col[i * 3 + 2] = tmp.b;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  return geo;
+}
+
+function makeMeteorField(g) {
+  const grp = new THREE.Group();
+  const rockGeo = rockGeometry();
+  const rockMat = new THREE.MeshBasicMaterial({ vertexColors: true });
+  const rocks = [];
+  for (let i = 0; i < METEOR.pool; i++) {
+    const mesh = new THREE.Mesh(rockGeo, rockMat);
+    mesh.visible = false;
+    grp.add(mesh);
+    rocks.push({ mesh, live: false, t: 0, dur: 0, r: 0, grav: 0,
+                 pos: new THREE.Vector3(), vel: new THREE.Vector3(),
+                 last: new THREE.Vector3(), spin: new THREE.Vector3(),
+                 fireAcc: 0, smokeAcc: 0 });
+  }
+  const fire = makePuffPool(METEOR.fireCap, fireTex());
+  const smoke = makePuffPool(METEOR.smokeCap, smokeTex());
+  grp.add(fire.points, smoke.points);
+  scene.add(grp);
+  grp.sim = { u: g.mScale, rocks, fire, smoke, spawnIn: 0.4, cleared: false };
+  return grp;
+}
+
+const rnd = (a, b) => a + Math.random() * (b - a);
+// Where the ground is under (x, z): the relief surface when the slab has a
+// DEM, else the flat grid. Elevation view floats the route over the bare
+// grid, so the ground is y=0 there whatever the DEM says.
+function groundY(g, x, z) {
+  return (viewMode !== 'template' && g.demSample) ? g.demSample(x, z) * exagT() : 0;
+}
+
+function spawnMeteor(g, sim, rk) {
+  const u = sim.u, hp = g.headPos, ry = g.head.rotation.y;
+  // The bike model faces +X and is yawed by rotation.y, so its heading is
+  // (cos ry, 0, -sin ry) — the same atan2(-dz, dx) setProgress derives it from.
+  const fx = Math.cos(ry), fz = -Math.sin(ry);
+  const ahead = rnd(METEOR.ahead[0], METEOR.ahead[1]) * u;
+  const lat = rnd(-1, 1) * METEOR.lateral * u;
+  const tx = hp.x + fx * ahead - fz * lat, tz = hp.z + fz * ahead + fx * lat;
+  const ty = groundY(g, tx, tz);
+  // Entry point is up and BEHIND the rider along the heading (with some
+  // angular spread), so every meteor visibly overtakes the bike on its way
+  // down — that is what sells "fleeing" rather than "being shelled".
+  const h = METEOR.height * u, back = h * rnd(0.35, 0.8), ang = rnd(-0.5, 0.5);
+  const bx = fx * Math.cos(ang) + fz * Math.sin(ang);
+  const bz = -fx * Math.sin(ang) + fz * Math.cos(ang);
+  const dur = rnd(METEOR.fallTime[0], METEOR.fallTime[1]);
+  rk.pos.set(tx - bx * back, ty + h, tz - bz * back);
+  // Mild gravity for a visible arc; the launch velocity is solved so the
+  // rock still lands on the chosen spot after `dur` seconds.
+  rk.grav = 0.5 * h / (dur * dur);
+  rk.vel.set((tx - rk.pos.x) / dur, -h / dur + 0.5 * rk.grav * dur, (tz - rk.pos.z) / dur);
+  rk.r = rnd(METEOR.rock[0], METEOR.rock[1]) * u;
+  rk.mesh.scale.set(rk.r * rnd(0.8, 1.25), rk.r * rnd(0.7, 1.1), rk.r * rnd(0.8, 1.25));
+  rk.mesh.rotation.set(rnd(0, 6.28), rnd(0, 6.28), rnd(0, 6.28));
+  rk.spin.set(rnd(-6, 6), rnd(-6, 6), rnd(-6, 6));
+  rk.mesh.position.copy(rk.pos);
+  rk.mesh.visible = true;
+  rk.last.copy(rk.pos);
+  rk.t = 0; rk.dur = dur; rk.fireAcc = 0; rk.smokeAcc = 0; rk.live = true;
+}
+
+// Drop puffs along the segment the rock just travelled, one every `step`
+// units of path, so the trail density does not depend on the frame rate.
+// `acc` carries the leftover distance between frames.
+function trailAlong(rk, acc, step, pool, kind, u) {
+  const seg = rk.last.distanceTo(rk.pos), r = rk.r;
+  let d = step - acc;
+  while (d <= seg) {
+    const f = d / seg;
+    const x = rk.last.x + (rk.pos.x - rk.last.x) * f;
+    const y = rk.last.y + (rk.pos.y - rk.last.y) * f;
+    const z = rk.last.z + (rk.pos.z - rk.last.z) * f;
+    if (kind === 0)
+      emitPuff(pool, x, y, z, rnd(-1, 1) * u, rnd(-0.5, 1.5) * u, rnd(-1, 1) * u,
+               METEOR.fireLife, r * 1.8, r * 0.35, 0);
+    else
+      emitPuff(pool, x, y, z, rnd(-1.5, 1.5) * u, rnd(1, 3) * u, rnd(-1.5, 1.5) * u,
+               METEOR.smokeLife, r * 1.2, r * 4.5, 2);
+    d += step;
+  }
+  return (acc + seg) % step;
+}
+
+function impact(sim, rk) {
+  const u = sim.u, r = rk.r, p = rk.pos;
+  const gy = groundY(ride, p.x, p.z);
+  for (let i = 0; i < 5; i++)
+    emitPuff(sim.fire, p.x, gy + r, p.z, rnd(-2, 2) * u, rnd(1, 4) * u, rnd(-2, 2) * u,
+             rnd(0.18, 0.3), r * 2.5, r * 7, 1);
+  for (let i = 0; i < 9; i++) {
+    const a = rnd(0, 6.28), s = rnd(4, 10) * u;
+    emitPuff(sim.smoke, p.x, gy + r * 0.5, p.z, Math.cos(a) * s, rnd(1.5, 4) * u, Math.sin(a) * s,
+             rnd(0.9, 1.5), r * 1.5, r * 8, 3);
+  }
+  rk.live = false; rk.mesh.visible = false;
+}
+
+function resetMeteors(sim) {
+  for (const rk of sim.rocks) { rk.live = false; rk.mesh.visible = false; }
+  sim.fire.life.fill(0); sim.smoke.life.fill(0);
+  updatePuffs(sim.fire, 0); updatePuffs(sim.smoke, 0);
+}
+
+function meteorTick(dt) {
+  const g = ride, fld = g?.meteors; if (!fld) return;
+  const sim = fld.sim;
+  if (!meteorsOn) { // one clearing pass, then nothing until switched back on
+    if (!sim.cleared) { resetMeteors(sim); sim.cleared = true; }
+    return;
+  }
+  sim.cleared = false;
+  const u = sim.u;
+  // The head marker exists only after the first full build; hold off until
+  // there is a bike to fall ahead of.
+  if (g.head && g.headPos) {
+    sim.spawnIn -= dt;
+    if (sim.spawnIn <= 0) {
+      sim.spawnIn = rnd(0.5, 1.5) / (playing ? METEOR.rate : METEOR.idleRate);
+      let rk = null;
+      for (const r of sim.rocks) if (!r.live) { rk = r; break; }
+      if (rk) spawnMeteor(g, sim, rk);
+    }
+  }
+  for (const rk of sim.rocks) {
+    if (!rk.live) continue;
+    rk.t += dt;
+    rk.last.copy(rk.pos);
+    rk.vel.y -= rk.grav * dt;
+    rk.pos.addScaledVector(rk.vel, dt);
+    rk.mesh.position.copy(rk.pos);
+    rk.mesh.rotation.x += rk.spin.x * dt;
+    rk.mesh.rotation.y += rk.spin.y * dt;
+    rk.mesh.rotation.z += rk.spin.z * dt;
+    rk.fireAcc = trailAlong(rk, rk.fireAcc, METEOR.fireStep * u, sim.fire, 0, u);
+    rk.smokeAcc = trailAlong(rk, rk.smokeAcc, METEOR.smokeStep * u, sim.smoke, 2, u);
+    // Land on the real surface (a hill can rise above the aimed-at ground),
+    // with a time cap so a rock can never fall forever off the slab.
+    if (rk.pos.y <= groundY(g, rk.pos.x, rk.pos.z) + rk.r * 0.3 || rk.t > rk.dur * 1.6)
+      impact(sim, rk);
+  }
+  updatePuffs(sim.fire, dt);
+  updatePuffs(sim.smoke, dt);
+}
+
 function buildRide(gj) {
   clearRide();
   const feat = (gj.features || []).find(f => f.geometry?.type === 'LineString');
@@ -435,6 +758,7 @@ function buildRide(gj) {
   g.endDot = makeFlag(null, true); // checkered finish
   g.head = makeBike();
   for (const m of [g.startDot, g.endDot, g.head]) m.scale.setScalar(g.mScale);
+  g.meteors = makeMeteorField(g); // sized from mScale, so it comes after it
   g.startDot.position.copy(g.drawn[0]);
   g.endDot.position.copy(g.drawn[g.drawn.length - 1]);
 
@@ -1329,6 +1653,10 @@ document.getElementById('follow').addEventListener('click', e => {
   if (follow) chaseSnap();   // pull back to a sensible chase distance
   else frameCamera();        // back to the framed overview
 });
+document.getElementById('meteors').addEventListener('click', e => {
+  meteorsOn = !meteorsOn; e.target.classList.toggle('on', meteorsOn);
+  // the field clears itself on its next tick (meteorTick)
+});
 document.getElementById('exag').addEventListener('input', e => {
   exag = Number(e.target.value);
   if (!ride) return;
@@ -1354,6 +1682,16 @@ function animate(now) {
     if (headT >= 1) { headT = 1; playing = false; setPlayIcon(); }
     setProgress(headT);
   }
+  // The shower is decoration: a throw in it must never take the viewer
+  // down with it. First failure logs once and switches it off for this ride.
+  if (ride && !ride.meteorsBroken) {
+    try { meteorTick(dt); }
+    catch (e) {
+      ride.meteorsBroken = true;
+      if (ride.meteors) ride.meteors.visible = false;
+      console.warn('meteor shower disabled:', e);
+    }
+  }
   controls.update();
   sky.position.copy(camera.position); // dome rides along, never clips
   renderer.render(scene, camera);
@@ -1364,6 +1702,9 @@ function resize() {
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
   if (ride?.mat) ride.mat.resolution.set(innerWidth, innerHeight);
+  // device pixels per world unit at 1 m, for the meteor point sprites
+  meteorScale.value = innerHeight * renderer.getPixelRatio() * 0.5
+                    / Math.tan(camera.fov * Math.PI / 360);
 }
 addEventListener('resize', resize); resize();
 </script>
