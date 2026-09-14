@@ -110,6 +110,17 @@ Rules that kept this codebase healthy:
 - The interposed `ANativeActivity_onCreate` works because the framework
   dlsym's OUR lib before libslint_cpp.so; store `NewGlobalRef(clazz)` there
   (`cyclomp_activity()`), then forward to Slint's real entry point.
+- `JNIEnv::FindClass` on the NDK's `android_main` thread resolves against the
+  BOOTSTRAP classloader (system libs only, no app dex): framework classes
+  (`android/content/Intent`, `android/app/Activity`, …) resolve fine, but our
+  OWN app classes throw `ClassNotFoundException` and JNI ABORTS the process.
+  This is why `RideService` (the one Java class, for the foreground service)
+  is never `FindClass`'d — its Intent is built with
+  `Intent.setClassName(Context, String)`, which names the component by string
+  and touches only framework classes (`src/ride_service_android.cpp`). If you
+  ever must load an app class from a native thread, go through the activity's
+  classloader (`activity.getClass().getClassLoader().loadClass(...)`), not
+  `FindClass`.
 - Sensors need NO permission and NO Java (`ASensorManager` C API).
 - Camera likewise: `libcamera2ndk` + `AImageReader` are plain C. Link
   `camera2ndk mediandk`. The HAL returns a FINISHED JPEG (AIMAGE_FORMAT_JPEG)
