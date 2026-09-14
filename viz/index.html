@@ -570,15 +570,19 @@ function loadMapLibre() {
 // minimal OpenMapTiles style), drop every symbol layer — at specimen scale
 // labels and POI icons are just noise — and retint what's left to a quiet
 // paper palette so the route is the only thing with colour.
+// Tuned for readability on the slab: the land is a warm paper tone so WHITE
+// roads stand out against it, water and parks carry real (if muted) colour,
+// and buildings sit a clear step darker than the land. An earlier pass had
+// every tone within a few percent of white and the map read as blank.
 const MINI = {
-  paper:  '#f7f7f5',  // background / land
-  water:  '#dde6ea',
-  green:  '#eef1ea',  // parks, woods
-  build:  '#ededea',
+  paper:  '#ebe7e0',  // background / land — deliberately darker than the roads
+  water:  '#a8c4d4',
+  green:  '#cfdcc2',  // parks, woods
+  build:  '#dcd6cc',
   road:   '#ffffff',  // road fill
-  casing: '#e3e3df',  // road outline, minor roads
-  rail:   '#e8e8e4',
-  admin:  '#dcdcd7',
+  casing: '#bcb5a9',  // road outline, minor roads
+  rail:   '#c9c2b6',
+  admin:  '#b6ae9f',
 };
 async function minimalStyle() {
   const style = await (await fetch('https://tiles.openfreemap.org/styles/positron')).json();
