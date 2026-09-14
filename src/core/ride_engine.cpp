@@ -43,9 +43,21 @@ std::optional<SessionSummary> RideEngine::stop(std::time_t now) {
 void RideEngine::tick(double dt_s, const Sample &s) {
     if (state_ != RideState::Running) return;
 
-    live_.elapsed_s += dt_s; // float accumulation — never lround per tick
+    if (!s.valid) {
+        // No fix. A brief dropout (tunnel, underpass, a few lost samples) is
+        // still moving time, so keep counting — but only within a grace window
+        // after the last valid fix. Beyond it the phone is most likely pocketed
+        // with GPS starved (e.g. a backgrounded ride throttled by the OS), and
+        // advancing the clock there invents moving time with no distance. Once
+        // the grace is spent the clock freezes until a fix returns.
+        since_valid_s_ += dt_s;
+        if (since_valid_s_ <= kNoFixGraceS)
+            live_.elapsed_s += dt_s; // float accumulation — never lround per tick
+        return; // no fix: the clock may move, the stats don't
+    }
 
-    if (!s.valid) return; // no fix: the clock moves, the stats don't
+    since_valid_s_ = 0;
+    live_.elapsed_s += dt_s;
 
     live_.speed_kmh = s.speed_kmh;
     live_.dist_km += s.speed_kmh * (dt_s / 3600.0);
@@ -83,6 +95,7 @@ void RideEngine::restore(const Snapshot &s) {
     samples_ = s.samples;
     hr_samples_ = s.hr_samples;
     cad_samples_ = s.cad_samples;
+    since_valid_s_ = 0; // fresh grace after a resume; time since last fix unknown
 }
 
 void RideEngine::reset_stats() {
@@ -90,6 +103,7 @@ void RideEngine::reset_stats() {
     sum_speed_ = max_kmh_ = 0;
     sum_hr_ = sum_cad_ = 0;
     samples_ = hr_samples_ = cad_samples_ = 0;
+    since_valid_s_ = 0;
 }
 
 } // namespace core

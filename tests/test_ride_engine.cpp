@@ -99,18 +99,37 @@ TEST_CASE("avg and max") {
     CHECK(s->max_kmh == doctest::Approx(30));
 }
 
-TEST_CASE("invalid samples advance the clock only") {
+TEST_CASE("brief no-fix dropout still advances the clock (within grace)") {
     RideEngine e;
     e.toggle();
     e.tick(0.5, fix(20));
     Sample nofix;
+    e.tick(0.5, nofix); // 0.5s without a fix, well inside the grace window
     e.tick(0.5, nofix);
-    e.tick(0.5, nofix);
-    CHECK(e.live().elapsed_s == doctest::Approx(1.5));
+    CHECK(e.live().elapsed_s == doctest::Approx(1.5)); // tunnel time still counts
     CHECK(e.live().dist_km == doctest::Approx(20 * 0.5 / 3600.0));
     auto s = e.stop(0);
     REQUIRE(s.has_value());
     CHECK(s->avg_kmh == doctest::Approx(20)); // one sample, not three
+}
+
+TEST_CASE("a long no-fix dropout freezes the clock past the grace window") {
+    RideEngine e;
+    e.toggle();
+    e.tick(0.5, fix(20)); // one real fix: elapsed 0.5, since-fix 0
+    Sample nofix;
+    // Simulate a pocketed, GPS-starved leg: 100 ticks (50s) with no fix.
+    for (int i = 0; i < 100; ++i) e.tick(0.5, nofix);
+    // Only kNoFixGraceS (30s) of that dropout is counted, then the clock stops.
+    const double expected = 0.5 + RideEngine::kNoFixGraceS;
+    CHECK(e.live().elapsed_s == doctest::Approx(expected)); // 30.5, not 50.5
+    CHECK(e.live().dist_km == doctest::Approx(20 * 0.5 / 3600.0)); // no phantom km
+
+    // A fix returning resets the grace and resumes counting.
+    e.tick(0.5, fix(20));
+    CHECK(e.live().elapsed_s == doctest::Approx(expected + 0.5));
+    e.tick(0.5, nofix);
+    CHECK(e.live().elapsed_s == doctest::Approx(expected + 1.0)); // grace fresh
 }
 
 TEST_CASE("optional HR/cadence channels") {

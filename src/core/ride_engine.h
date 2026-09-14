@@ -56,8 +56,14 @@ public:
     // Any state -> Idle. Summary only when a ride with samples ended.
     std::optional<SessionSummary> stop(std::time_t now);
 
-    // No-op unless Running. An invalid sample advances the clock only.
+    // No-op unless Running. An invalid sample advances the clock only within
+    // kNoFixGraceS of the last valid fix; a longer dropout freezes it (a
+    // pocketed, GPS-starved ride must not accumulate phantom moving time).
     void tick(double dt_s, const Sample &s);
+
+    // How long moving time keeps accruing after GPS drops out. Covers tunnels
+    // and brief signal loss; caps the damage of a long background starvation.
+    static constexpr double kNoFixGraceS = 30.0;
 
     const LiveStats &live() const { return live_; }
 
@@ -81,6 +87,7 @@ private:
     double sum_speed_ = 0, max_kmh_ = 0;
     long sum_hr_ = 0, sum_cad_ = 0;
     int samples_ = 0, hr_samples_ = 0, cad_samples_ = 0;
+    double since_valid_s_ = 0; // seconds since the last valid fix (grace window)
 };
 
 // Finished rides, newest first.
