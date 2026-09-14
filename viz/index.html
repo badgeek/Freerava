@@ -165,7 +165,10 @@
         <svg viewBox="0 0 10 6" class="w-2.5 h-1.5 fill-none stroke-current stroke-[1.6]"
           stroke-linecap="round" stroke-linejoin="round"><path d="M1 1l4 4 4-4"/></svg>
       </button>
-      <div id="fxmenu" class="hide absolute bottom-[calc(100%+8px)] right-0 z-[4] w-[178px]
+      <!-- fixed, not absolute: on phones this sits inside the overflow-x-auto
+           pill strip, and an overflow container clips a popup that pops above
+           it. Placed from the button's rect in fxOpen(). -->
+      <div id="fxmenu" class="hide fixed z-[6] w-[178px]
              bg-card border border-bd rounded-xl shadow-card p-1.5">
         <button data-fx="meteors" class="fx-item on w-full flex items-center justify-between gap-2
           rounded-lg px-2.5 py-2 text-[12.5px] font-semibold text-muted transition hover:bg-canvas">
@@ -2352,11 +2355,21 @@ function fxSync() {
 function fxOpen(on) {
   fxMenu.classList.toggle('hide', !on);
   fxBtn.setAttribute('aria-expanded', String(on));
+  if (!on) return;
+  // Anchor above the button, right-aligned to it, clamped to the viewport.
+  // Measured after unhiding so offsetWidth is real.
+  const r = fxBtn.getBoundingClientRect();
+  const w = fxMenu.offsetWidth || 178;
+  fxMenu.style.left = Math.round(Math.max(8, Math.min(innerWidth - w - 8, r.right - w))) + 'px';
+  fxMenu.style.top = 'auto';
+  fxMenu.style.bottom = Math.round(innerHeight - r.top + 8) + 'px';
 }
 fxBtn.addEventListener('click', e => {
   e.stopPropagation();
   fxOpen(fxMenu.classList.contains('hide'));
 });
+// Reposition rather than float away if the viewport changes while it's open.
+addEventListener('resize', () => { if (!fxMenu.classList.contains('hide')) fxOpen(true); });
 fxMenu.addEventListener('click', e => {
   const b = e.target.closest('[data-fx]');
   if (!b) return;
@@ -2364,9 +2377,11 @@ fxMenu.addEventListener('click', e => {
   fxSet[b.dataset.fx](!fxGet[b.dataset.fx]());
   fxSync();
 });
-// Tap anywhere else (including the 3D canvas) dismisses it.
+// Tap anywhere else (including the 3D canvas) dismisses it. contains() rather
+// than an identity check: a tap lands on the button's inner span or svg, which
+// would otherwise read as "outside" and close the menu during its own open tap.
 addEventListener('pointerdown', e => {
-  if (!fxMenu.classList.contains('hide') && !fxMenu.contains(e.target) && e.target !== fxBtn)
+  if (!fxMenu.classList.contains('hide') && !fxMenu.contains(e.target) && !fxBtn.contains(e.target))
     fxOpen(false);
 });
 addEventListener('keydown', e => { if (e.key === 'Escape') fxOpen(false); });
