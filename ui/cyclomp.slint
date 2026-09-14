@@ -1380,12 +1380,64 @@ export component AppWindow inherits Window {
                     height: parent.height - 74px; // room for the replay bar
                     border-width: 1px;
                     border-color: Palette.line;
-                    clip: true;
+                    clip: true; // the pinch preview scales the frame past the edges
                     if root.map-available : Image {
-                        width: 100%;
-                        height: 100%;
+                        // Same anchored pinch-preview transform as the MAP
+                        // screen: x' = A*(1-s). mbgl renders once on commit.
+                        x: root.map-pinch-ax * (1 - root.map-preview-scale);
+                        y: root.map-pinch-ay * (1 - root.map-preview-scale);
+                        width: parent.width * root.map-preview-scale;
+                        height: parent.height * root.map-preview-scale;
                         source: root.map-frame;
                         image-fit: cover;
+                    }
+                    // Pan / pinch-zoom / double-tap on the ride-detail map,
+                    // driving the same shared mbgl camera as the MAP screen via
+                    // the same callbacks. Suppressed during replay, where the
+                    // flyover owns the camera and a gesture would fight it.
+                    if root.map-available && !root.replay-playing
+                       : dgest := ScaleRotateGestureHandler {
+                        property <float> last-scale: 1.0;
+                        started => {
+                            root.map-pinch-ax = self.center.x;
+                            root.map-pinch-ay = self.center.y;
+                            root.map-preview-scale = 1.0;
+                            self.last-scale = 1.0;
+                            root.map-pinch-begin();
+                        }
+                        updated => {
+                            self.last-scale = self.scale;
+                            root.map-preview-scale = self.scale;
+                        }
+                        ended => {
+                            root.map-pinch-commit(self.last-scale,
+                                                  root.map-pinch-ax / 1px,
+                                                  root.map-pinch-ay / 1px);
+                        }
+                        cancelled => {
+                            root.map-pinch-commit(self.last-scale,
+                                                  root.map-pinch-ax / 1px,
+                                                  root.map-pinch-ay / 1px);
+                        }
+                        TouchArea {
+                            property <length> last-x;
+                            property <length> last-y;
+                            pointer-event(ev) => {
+                                if (ev.kind == PointerEventKind.down) {
+                                    last-x = self.mouse-x;
+                                    last-y = self.mouse-y;
+                                }
+                            }
+                            moved => {
+                                if (!dgest.active) {
+                                    root.map-pan((self.mouse-x - last-x) / 1px,
+                                                 (self.mouse-y - last-y) / 1px);
+                                }
+                                last-x = self.mouse-x;
+                                last-y = self.mouse-y;
+                            }
+                            double-clicked => { root.map-zoom(1); }
+                        }
                     }
                     // replay marker (same cover-projection as the MAP screen)
                     if root.map-available && root.marker-valid
