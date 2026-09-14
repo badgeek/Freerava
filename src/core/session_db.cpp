@@ -28,7 +28,12 @@ constexpr const char *kSchema =
     " max_kmh REAL, sum_hr INTEGER, sum_cad INTEGER, samples INTEGER,"
     " hr_samples INTEGER, cad_samples INTEGER);"
     "CREATE TABLE IF NOT EXISTS active_trackpoint("
-    " seq INTEGER, lat REAL, lon REAL, speed REAL, t_s REAL, alt REAL);";
+    " seq INTEGER, lat REAL, lon REAL, speed REAL, t_s REAL, alt REAL);"
+    // session_id 0 = taken but not yet claimed by a finished ride.
+    "CREATE TABLE IF NOT EXISTS photo("
+    " id INTEGER PRIMARY KEY, session_id INTEGER, taken_at INTEGER,"
+    " lat REAL, lon REAL, has_fix INTEGER, t_s REAL, path TEXT);"
+    "CREATE INDEX IF NOT EXISTS idx_photo ON photo(session_id, taken_at);";
 
 } // namespace
 
@@ -336,6 +341,77 @@ bool SessionStore::load_active(ActiveRide &out) const {
 bool SessionStore::clear_active() {
     if (!db_) return false;
     return exec("DELETE FROM active_ride; DELETE FROM active_trackpoint;");
+}
+
+bool SessionStore::add_photo(Photo &p) {
+    if (!db_) return false;
+    sqlite3_stmt *st = nullptr;
+    if (sqlite3_prepare_v2(db_,
+                           "INSERT INTO photo(session_id,taken_at,lat,lon,has_fix,"
+                           "t_s,path) VALUES(?,?,?,?,?,?,?)",
+                           -1, &st, nullptr) != SQLITE_OK)
+        return false;
+    sqlite3_bind_int64(st, 1, (sqlite3_int64)p.session_id);
+    sqlite3_bind_int64(st, 2, (sqlite3_int64)p.taken_at);
+    sqlite3_bind_double(st, 3, p.lat);
+    sqlite3_bind_double(st, 4, p.lon);
+    sqlite3_bind_int(st, 5, p.has_fix ? 1 : 0);
+    sqlite3_bind_double(st, 6, p.t_s);
+    sqlite3_bind_text(st, 7, p.path.c_str(), -1, SQLITE_TRANSIENT);
+    const bool okv = sqlite3_step(st) == SQLITE_DONE;
+    sqlite3_finalize(st);
+    if (okv) p.id = (long long)sqlite3_last_insert_rowid(db_);
+    return okv;
+}
+
+long SessionStore::bind_photos(long long session_id) {
+    if (!db_ || session_id <= 0) return 0;
+    sqlite3_stmt *st = nullptr;
+    if (sqlite3_prepare_v2(db_, "UPDATE photo SET session_id=? WHERE session_id=0",
+                           -1, &st, nullptr) != SQLITE_OK)
+        return 0;
+    sqlite3_bind_int64(st, 1, (sqlite3_int64)session_id);
+    const bool okv = sqlite3_step(st) == SQLITE_DONE;
+    sqlite3_finalize(st);
+    return okv ? (long)sqlite3_changes(db_) : 0;
+}
+
+bool SessionStore::photos_for(long long session_id, std::vector<Photo> &out) const {
+    if (!db_) return false;
+    sqlite3_stmt *st = nullptr;
+    if (sqlite3_prepare_v2(db_,
+                           "SELECT id,session_id,taken_at,lat,lon,has_fix,t_s,path "
+                           "FROM photo WHERE session_id=? ORDER BY taken_at ASC",
+                           -1, &st, nullptr) != SQLITE_OK)
+        return false;
+    sqlite3_bind_int64(st, 1, (sqlite3_int64)session_id);
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        Photo p;
+        p.id = (long long)sqlite3_column_int64(st, 0);
+        p.session_id = (long long)sqlite3_column_int64(st, 1);
+        p.taken_at = (std::time_t)sqlite3_column_int64(st, 2);
+        p.lat = sqlite3_column_double(st, 3);
+        p.lon = sqlite3_column_double(st, 4);
+        p.has_fix = sqlite3_column_int(st, 5) != 0;
+        p.t_s = sqlite3_column_double(st, 6);
+        if (const unsigned char *t = sqlite3_column_text(st, 7))
+            p.path = reinterpret_cast<const char *>(t);
+        out.push_back(p);
+    }
+    sqlite3_finalize(st);
+    return true;
+}
+
+bool SessionStore::delete_photos(long long session_id) {
+    if (!db_ || session_id <= 0) return false;
+    sqlite3_stmt *st = nullptr;
+    if (sqlite3_prepare_v2(db_, "DELETE FROM photo WHERE session_id=?", -1, &st,
+                           nullptr) != SQLITE_OK)
+        return false;
+    sqlite3_bind_int64(st, 1, (sqlite3_int64)session_id);
+    const bool okv = sqlite3_step(st) == SQLITE_DONE;
+    sqlite3_finalize(st);
+    return okv;
 }
 
 long SessionStore::import_text_log(const std::string &sessions_txt_path) {

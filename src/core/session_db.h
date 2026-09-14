@@ -5,6 +5,7 @@
 // mbgl / Android here.
 #pragma once
 
+#include "core/photo.h"
 #include "core/ride_engine.h"
 #include "core/track.h"
 
@@ -48,6 +49,18 @@ public:
     // Drop one stored session and its trackpoints. True when a row went away;
     // false if `id` matched nothing (already deleted, or never persisted).
     bool delete_session(long long id);
+
+    // ---- Ride photos ----
+    // A selfie is taken mid-ride, before the session it belongs to has a rowid,
+    // so it lands with session_id 0 and is claimed by bind_photos() when the
+    // ride is finalised. On success `p.id` is set.
+    bool add_photo(Photo &p);
+    // Give every unbound photo to `session_id`. Returns how many were claimed.
+    long bind_photos(long long session_id);
+    bool photos_for(long long session_id, std::vector<Photo> &out) const;
+    // Dropped alongside their session; the JPEGs on disk are the caller's
+    // problem (this store never deletes files it did not write).
+    bool delete_photos(long long session_id);
 
     // ---- In-progress ride (single slot) ----
     bool save_active(const ActiveRide &a);

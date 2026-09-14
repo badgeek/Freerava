@@ -181,3 +181,73 @@ TEST_CASE("SessionStore imports a legacy text log") {
     CHECK(log.newest_first()[0].ended_at == 2000);
     std::remove(txt.c_str());
 }
+
+TEST_CASE("photos are taken unbound, then claimed by the finished ride") {
+    SessionStore db;
+    REQUIRE(db.open(tmp_db()));
+
+    // Mid-ride: the session does not exist yet, so photos land with id 0.
+    Photo a; a.taken_at = 1000; a.lat = -7.73; a.lon = 110.38; a.has_fix = true;
+    a.t_s = 12.5; a.path = "/files/photos/a.jpg";
+    Photo b; b.taken_at = 1100; b.has_fix = false; b.t_s = 90; b.path = "/files/photos/b.jpg";
+    REQUIRE(db.add_photo(a));
+    REQUIRE(db.add_photo(b));
+    CHECK(a.id > 0);
+    CHECK(b.id != a.id);
+
+    // Nothing is visible under a session until it is bound.
+    std::vector<Photo> none;
+    REQUIRE(db.photos_for(42, none));
+    CHECK(none.empty());
+
+    // The ride ends and takes ownership of everything outstanding.
+    SessionSummary s = make_session(2000, 5.0, 3);
+    REQUIRE(db.add_session(s));
+    CHECK(db.bind_photos(s.id) == 2);
+    CHECK(db.bind_photos(s.id) == 0); // nothing left unbound
+
+    std::vector<Photo> got;
+    REQUIRE(db.photos_for(s.id, got));
+    REQUIRE(got.size() == 2);
+    CHECK(got[0].taken_at == 1000);      // ordered by capture time
+    CHECK(got[1].taken_at == 1100);
+    CHECK(got[0].has_fix);
+    CHECK_FALSE(got[1].has_fix);         // shutter beat the first fix
+    CHECK(got[0].lat == doctest::Approx(-7.73));
+    CHECK(got[0].t_s == doctest::Approx(12.5));
+    CHECK(got[0].path == "/files/photos/a.jpg");
+    CHECK(got[0].session_id == s.id);
+}
+
+TEST_CASE("a later ride cannot steal the previous ride's photos") {
+    SessionStore db;
+    REQUIRE(db.open(tmp_db()));
+
+    Photo p1; p1.taken_at = 10; p1.path = "/1.jpg";
+    REQUIRE(db.add_photo(p1));
+    SessionSummary s1 = make_session(100, 1.0, 0);
+    REQUIRE(db.add_session(s1));
+    CHECK(db.bind_photos(s1.id) == 1);
+
+    Photo p2; p2.taken_at = 20; p2.path = "/2.jpg";
+    REQUIRE(db.add_photo(p2));
+    SessionSummary s2 = make_session(200, 2.0, 0);
+    REQUIRE(db.add_session(s2));
+    CHECK(db.bind_photos(s2.id) == 1); // only the new one
+
+    std::vector<Photo> a, b;
+    REQUIRE(db.photos_for(s1.id, a));
+    REQUIRE(db.photos_for(s2.id, b));
+    REQUIRE(a.size() == 1);
+    REQUIRE(b.size() == 1);
+    CHECK(a[0].path == "/1.jpg");
+    CHECK(b[0].path == "/2.jpg");
+
+    // Deleting one ride's photos leaves the other's alone.
+    CHECK(db.delete_photos(s1.id));
+    std::vector<Photo> a2, b2;
+    db.photos_for(s1.id, a2);
+    db.photos_for(s2.id, b2);
+    CHECK(a2.empty());
+    CHECK(b2.size() == 1);
+}

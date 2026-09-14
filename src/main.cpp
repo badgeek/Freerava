@@ -711,7 +711,7 @@ int main(int, char **)
     });
 
     // Export the selected ride to a GeoJSON file (feeds the Three.js viewer).
-    ui->on_export_ride([ui = slint::ComponentWeakHandle(ui), log] {
+    ui->on_export_ride([ui = slint::ComponentWeakHandle(ui), log, store] {
         auto u = ui.lock();
         if (!u) return;
         auto &w = **u;
@@ -720,7 +720,9 @@ int main(int, char **)
         if (i < 0 || (size_t)i >= rows.size()) return;
         std::string name;
         std::string path = export_path(rows[i].ended_at, &name);
-        std::string js = core::session_to_geojson(rows[i]);
+        std::vector<core::Photo> shots;
+        if (store->ok() && rows[i].id > 0) store->photos_for(rows[i].id, shots);
+        std::string js = core::session_to_geojson(rows[i], shots);
         std::FILE *f = std::fopen(path.c_str(), "w");
         if (f && std::fwrite(js.data(), 1, js.size(), f) == js.size()) {
             std::fclose(f);
@@ -1087,7 +1089,8 @@ int main(int, char **)
     // Slint loop because touching window state off-thread aborts.
 #ifdef __ANDROID__
     ui->set_camera_available(selfie::available());
-    ui->on_take_photo([ui = slint::ComponentWeakHandle(ui), current_position] {
+    ui->on_take_photo([ui = slint::ComponentWeakHandle(ui), current_position,
+                       store, engine] {
         auto u = ui.lock();
         if (!u) return;
         (*u)->set_photo_status(slint::SharedString("CAPTURING..."));
@@ -1098,8 +1101,11 @@ int main(int, char **)
         const bool fixed = current_position(la, lo);
         const std::time_t when = std::time(nullptr);
         const std::string path = photo_path(when);
+        // Elapsed ride time is what places the photo on the track later when
+        // there was no fix at the shutter.
+        const double t_s = engine->live().elapsed_s;
 
-        std::thread([ui, path, when, la, lo, fixed] {
+        std::thread([ui, path, when, la, lo, fixed, t_s, store] {
             selfie::capture(path, [&](selfie::Shot shot) {
                 std::string msg;
                 if (shot.ok) {
@@ -1115,6 +1121,18 @@ int main(int, char **)
                                         "selfie %s lat=%.6f lon=%.6f fix=%d t=%lld",
                                         path.c_str(), la, lo, (int)fixed,
                                         (long long)when);
+                    // Row first, file already on disk: a photo the DB never
+                    // heard about would silently miss every future export.
+                    if (store->ok()) {
+                        core::Photo rec;
+                        rec.taken_at = when;
+                        rec.lat = la; rec.lon = lo; rec.has_fix = fixed;
+                        rec.t_s = t_s; rec.path = path;
+                        if (!store->add_photo(rec))
+                            __android_log_print(ANDROID_LOG_ERROR, "cyclomp-camera",
+                                                "photo saved but NOT recorded: %s",
+                                                path.c_str());
+                    }
                 } else {
                     msg = "FAILED: " + shot.error;
                 }
@@ -1139,8 +1157,12 @@ int main(int, char **)
                 s->track = recorder->points();
                 // Store first: add_session stamps the new rowid onto `s`, and
                 // the log's copy needs it to be purgeable without a restart.
-                if (store->ok())
+                if (store->ok()) {
                     store->add_session(*s); // atomic append, no full rewrite
+                    // Selfies were stored unbound while riding (the session had
+                    // no rowid yet); hand them over now.
+                    if (s->id > 0) store->bind_photos(s->id);
+                }
                 log->add(*s);
                 sessions->insert(0, to_row(*s)); // newest first
                 if (!store->ok()) core::save_sessions(sessions_path(), *log);
