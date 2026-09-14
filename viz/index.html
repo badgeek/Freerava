@@ -54,50 +54,57 @@
 <header id="header" style="display:none"
   class="fixed top-0 inset-x-0 z-[3] bg-white/80 backdrop-blur-md backdrop-saturate-150
          border-b border-bd shadow-[0_6px_20px_rgba(20,20,30,.05)]">
-  <div class="w-full px-3 sm:px-6 py-2 sm:py-2.5 flex items-center gap-3 sm:gap-5 flex-wrap">
-    <div class="flex items-center gap-2.5 sm:gap-3 min-w-0 shrink-0">
-      <span class="w-[4px] sm:w-[5px] h-[26px] sm:h-[30px] rounded-[3px] shrink-0 bg-gradient-to-b from-accent to-accentd"></span>
+  <!-- Phone: one left alignment axis for every row (title text, stat values,
+       mode pills all start at the container's padding edge — the accent tick
+       is dropped there rather than indenting the title off that axis), and a
+       3-column grid so the six stats sit on a real grid instead of a ragged
+       content-width strip. Desktop keeps the single-row layout. -->
+  <div class="w-full px-4 sm:px-6 py-2.5 flex flex-col sm:flex-row sm:items-center sm:flex-wrap gap-2.5 sm:gap-5">
+    <div class="flex items-center gap-0 sm:gap-3 min-w-0 shrink-0">
+      <span class="hidden sm:block w-[5px] h-[30px] rounded-[3px] shrink-0 bg-gradient-to-b from-accent to-accentd"></span>
       <div class="min-w-0">
-        <h1 class="text-[13.5px] sm:text-[15px] font-bold tracking-tight leading-tight m-0 truncate">Ride Viewer</h1>
+        <h1 class="text-[14px] sm:text-[15px] font-bold tracking-tight leading-tight m-0 truncate">Ride Viewer</h1>
         <span id="date" class="block text-muted text-[11px] sm:text-[11.5px] mt-px tabular-nums truncate"></span>
       </div>
     </div>
 
     <div id="viewmodes" style="display:none"
-      class="order-3 sm:order-none w-full sm:w-auto overflow-x-auto no-sb mx-auto shrink-0 flex items-center bg-canvas border border-bd rounded-full p-[3px] gap-[2px]">
+      class="order-last sm:order-none w-full sm:w-auto overflow-x-auto no-sb sm:mx-auto shrink-0 flex items-center bg-canvas border border-bd rounded-full p-[3px] gap-[2px]">
       <button data-mode="map" class="on text-xs font-semibold text-muted rounded-full px-[13px] py-[6px] leading-none whitespace-nowrap transition hover:text-ink">Map</button>
       <button data-mode="hybrid" class="text-xs font-semibold text-muted rounded-full px-[13px] py-[6px] leading-none whitespace-nowrap transition hover:text-ink">Map&nbsp;+&nbsp;Elev</button>
       <button data-mode="grid" class="text-xs font-semibold text-muted rounded-full px-[13px] py-[6px] leading-none whitespace-nowrap transition hover:text-ink">Grid</button>
       <button data-mode="template" class="text-xs font-semibold text-muted rounded-full px-[13px] py-[6px] leading-none whitespace-nowrap transition hover:text-ink">Elevation</button>
     </div>
 
-    <!-- min-w-0 + shrinkable: the six cells are wider than a phone, so this
-         box must be allowed to narrow and scroll internally rather than force
-         the header wider than the viewport. -->
-    <div class="flex items-stretch ml-auto min-w-0 max-w-full overflow-x-auto no-sb">
-      <div class="px-2.5 sm:px-4 py-0.5 shrink-0">
-        <div class="text-[17px] sm:text-[21px] font-semibold tracking-tight tabular-nums leading-tight whitespace-nowrap text-accent"><span id="s-dist">0.0</span><i class="not-italic text-xs font-semibold text-muted ml-[3px]">km</i></div>
-        <div class="text-[9px] sm:text-[10.5px] text-faint uppercase tracking-wide mt-[3px] font-semibold whitespace-nowrap">Distance</div>
+    <!-- Phone: a 3x2 grid keeps all six stats visible and on a shared grid,
+         so value/label pairs line up column to column. From sm up it returns
+         to the divider strip, min-w-0 so it narrows and scrolls internally
+         rather than forcing the header wider than the viewport. -->
+    <div class="grid grid-cols-6 gap-x-2
+                sm:flex sm:items-stretch sm:ml-auto sm:min-w-0 sm:max-w-full sm:overflow-x-auto no-sb">
+      <div class="py-0.5 sm:px-4 sm:shrink-0">
+        <div class="text-[15px] sm:text-[21px] font-semibold tracking-tight tabular-nums leading-tight whitespace-nowrap text-accent"><span id="s-dist">0.0</span><i class="not-italic text-xs font-semibold text-muted ml-[3px]">km</i></div>
+        <div class="text-[9px] sm:text-[10.5px] text-faint uppercase tracking-wide mt-[3px] font-semibold whitespace-nowrap"><span class="sm:hidden">Dist</span><span class="hidden sm:inline">Distance</span></div>
       </div>
-      <div class="px-2.5 sm:px-4 py-0.5 shrink-0 border-l border-bd">
-        <div class="text-[17px] sm:text-[21px] font-semibold tracking-tight tabular-nums leading-tight whitespace-nowrap"><span id="s-time">0:00</span></div>
-        <div class="text-[9px] sm:text-[10.5px] text-faint uppercase tracking-wide mt-[3px] font-semibold whitespace-nowrap">Moving Time</div>
+      <div class="py-0.5 sm:px-4 sm:shrink-0 sm:border-l sm:border-bd">
+        <div class="text-[15px] sm:text-[21px] font-semibold tracking-tight tabular-nums leading-tight whitespace-nowrap"><span id="s-time">0:00</span></div>
+        <div class="text-[9px] sm:text-[10.5px] text-faint uppercase tracking-wide mt-[3px] font-semibold whitespace-nowrap"><span class="sm:hidden">Time</span><span class="hidden sm:inline">Moving Time</span></div>
       </div>
-      <div class="px-2.5 sm:px-4 py-0.5 shrink-0 border-l border-bd">
-        <div class="text-[17px] sm:text-[21px] font-semibold tracking-tight tabular-nums leading-tight whitespace-nowrap"><span id="s-avg">0</span><i class="not-italic text-xs font-semibold text-muted ml-[3px]">km/h</i></div>
-        <div class="text-[9px] sm:text-[10.5px] text-faint uppercase tracking-wide mt-[3px] font-semibold whitespace-nowrap">Avg Speed</div>
+      <div class="py-0.5 sm:px-4 sm:shrink-0 sm:border-l sm:border-bd">
+        <div class="text-[15px] sm:text-[21px] font-semibold tracking-tight tabular-nums leading-tight whitespace-nowrap"><span id="s-avg">0</span><i class="not-italic text-xs font-semibold text-muted ml-[3px]">km/h</i></div>
+        <div class="text-[9px] sm:text-[10.5px] text-faint uppercase tracking-wide mt-[3px] font-semibold whitespace-nowrap"><span class="sm:hidden">Avg</span><span class="hidden sm:inline">Avg Speed</span></div>
       </div>
-      <div class="px-2.5 sm:px-4 py-0.5 shrink-0 border-l border-bd">
-        <div class="text-[17px] sm:text-[21px] font-semibold tracking-tight tabular-nums leading-tight whitespace-nowrap"><span id="s-max">0</span><i class="not-italic text-xs font-semibold text-muted ml-[3px]">km/h</i></div>
-        <div class="text-[9px] sm:text-[10.5px] text-faint uppercase tracking-wide mt-[3px] font-semibold whitespace-nowrap">Max Speed</div>
+      <div class="py-0.5 sm:px-4 sm:shrink-0 sm:border-l sm:border-bd">
+        <div class="text-[15px] sm:text-[21px] font-semibold tracking-tight tabular-nums leading-tight whitespace-nowrap"><span id="s-max">0</span><i class="not-italic text-xs font-semibold text-muted ml-[3px]">km/h</i></div>
+        <div class="text-[9px] sm:text-[10.5px] text-faint uppercase tracking-wide mt-[3px] font-semibold whitespace-nowrap"><span class="sm:hidden">Max</span><span class="hidden sm:inline">Max Speed</span></div>
       </div>
-      <div class="px-2.5 sm:px-4 py-0.5 shrink-0 border-l border-bd">
-        <div class="text-[17px] sm:text-[21px] font-semibold tracking-tight tabular-nums leading-tight whitespace-nowrap"><span id="s-elev">0</span><i class="not-italic text-xs font-semibold text-muted ml-[3px]">m</i></div>
-        <div class="text-[9px] sm:text-[10.5px] text-faint uppercase tracking-wide mt-[3px] font-semibold whitespace-nowrap">Elev Gain</div>
+      <div class="py-0.5 sm:px-4 sm:shrink-0 sm:border-l sm:border-bd">
+        <div class="text-[15px] sm:text-[21px] font-semibold tracking-tight tabular-nums leading-tight whitespace-nowrap"><span id="s-elev">0</span><i class="not-italic text-xs font-semibold text-muted ml-[3px]">m</i></div>
+        <div class="text-[9px] sm:text-[10.5px] text-faint uppercase tracking-wide mt-[3px] font-semibold whitespace-nowrap"><span class="sm:hidden">Elev</span><span class="hidden sm:inline">Elev Gain</span></div>
       </div>
-      <div class="px-2.5 sm:px-4 py-0.5 shrink-0 border-l border-bd">
-        <div class="text-[17px] sm:text-[21px] font-semibold tracking-tight tabular-nums leading-tight whitespace-nowrap"><span id="s-hr">--</span><i class="not-italic text-xs font-semibold text-muted ml-[3px]">bpm</i></div>
-        <div class="text-[9px] sm:text-[10.5px] text-faint uppercase tracking-wide mt-[3px] font-semibold whitespace-nowrap">Avg HR</div>
+      <div class="py-0.5 sm:px-4 sm:shrink-0 sm:border-l sm:border-bd">
+        <div class="text-[15px] sm:text-[21px] font-semibold tracking-tight tabular-nums leading-tight whitespace-nowrap"><span id="s-hr">--</span><i class="not-italic text-xs font-semibold text-muted ml-[3px]">bpm</i></div>
+        <div class="text-[9px] sm:text-[10.5px] text-faint uppercase tracking-wide mt-[3px] font-semibold whitespace-nowrap"><span class="sm:hidden">HR</span><span class="hidden sm:inline">Avg HR</span></div>
       </div>
     </div>
   </div>
@@ -144,6 +151,9 @@
     <button id="zombies" title="Zombie horde chasing the rider"
       class="pill on shrink-0 text-[12.5px] font-semibold text-muted border border-bd rounded-full px-[13px] py-[7px]
              whitespace-nowrap transition hover:border-faint hover:text-ink">Zombies</button>
+    <button id="riot" title="Riot squad roadblocks across the route"
+      class="pill on shrink-0 text-[12.5px] font-semibold text-muted border border-bd rounded-full px-[13px] py-[7px]
+             whitespace-nowrap transition hover:border-faint hover:text-ink">Riot</button>
     <span id="reliefctl" class="flex shrink-0 items-center gap-[7px] text-muted text-[11.5px] font-semibold uppercase tracking-wide whitespace-nowrap">
       Relief <input id="exag" type="range" min="0" max="40" value="12" class="w-16 sm:w-20" /></span>
   </div>
@@ -338,7 +348,7 @@ function clearRide() {
   for (const o of [ride.route, ride.curtain, ride.head, ride.startDot,
                    ride.endDot, ride.terrain, ride.wire, ride.skirt, ride.cap,
                    ride.shadow, ride.base, ride.detail, ride.slab,
-                   ride.meteors, ride.zombies])
+                   ride.meteors, ride.zombies, ride.riot])
     disposeObj(o);
   grid.visible = true;
   document.getElementById('attrib').style.display = 'none';
@@ -554,6 +564,7 @@ const RAMP = {
   flashA: [1.0, 0.95, 0.70], flashB: [1.0, 0.40, 0.05],
   smokeA: [0.38, 0.36, 0.40], smokeB: [0.66, 0.65, 0.68],
   dustA: [0.55, 0.48, 0.42], dustB: [0.74, 0.70, 0.66],
+  gasA: [0.80, 0.83, 0.86], gasB: [0.93, 0.94, 0.95],
 };
 function puffColor(p, i, kind, k) {
   const c = i * 3;
@@ -567,9 +578,12 @@ function puffColor(p, i, kind, k) {
   } else if (kind === 2) { // smoke: fades in quick, lingers, thins out
     lerp3(p.col, c, RAMP.smokeA, RAMP.smokeB, k);
     p.alpha[i] = 0.45 * Math.min(1, k * 6) * (1 - k);
-  } else {                 // ground dust
+  } else if (kind === 3) { // ground dust
     lerp3(p.col, c, RAMP.dustA, RAMP.dustB, k);
     p.alpha[i] = 0.5 * (1 - k);
+  } else {                 // tear gas: pale, slow to bloom, slow to go
+    lerp3(p.col, c, RAMP.gasA, RAMP.gasB, k);
+    p.alpha[i] = 0.35 * Math.min(1, k * 4) * (1 - k);
   }
 }
 function updatePuffs(p, dt) {
@@ -1028,6 +1042,7 @@ function buildRide(gj) {
   for (const m of [g.startDot, g.endDot, g.head]) m.scale.setScalar(g.mScale);
   g.meteors = makeMeteorField(g); // sized from mScale, so it comes after it
   g.zombies = makeZombieHorde(g);
+  g.riot = makeRiotSquad(g);
   g.startDot.position.copy(g.drawn[0]);
   g.endDot.position.copy(g.drawn[g.drawn.length - 1]);
 
@@ -1808,6 +1823,8 @@ function setProgress(frac) {
     g.head.rotation.y = Math.atan2(-dzw, dxw);
 
   g.headPos = hp;
+  // Path distance of the bike, for anything staged ALONG the route.
+  g.headDist = g.cumD[i - 1] + (g.cumD[Math.min(i, g.cumD.length - 1)] - g.cumD[i - 1]) * f;
   // Chase cam: translate BOTH the orbit target and the camera by the same
   // delta. That follows the bike while leaving the offset vector — i.e. the
   // angle and distance the user set by dragging and scrolling — untouched,
@@ -1932,6 +1949,9 @@ document.getElementById('meteors').addEventListener('click', e => {
 document.getElementById('zombies').addEventListener('click', e => {
   zombiesOn = !zombiesOn; e.target.classList.toggle('on', zombiesOn);
 });
+document.getElementById('riot').addEventListener('click', e => {
+  riotOn = !riotOn; e.target.classList.toggle('on', riotOn);
+});
 document.getElementById('exag').addEventListener('input', e => {
   exag = Number(e.target.value);
   if (!ride) return;
@@ -1973,6 +1993,14 @@ function animate(now) {
       ride.zombiesBroken = true;
       if (ride.zombies) ride.zombies.visible = false;
       console.warn('zombie horde disabled:', e);
+    }
+  }
+  if (ride && !ride.riotBroken) {
+    try { riotTick(dt); }
+    catch (e) {
+      ride.riotBroken = true;
+      if (ride.riot) ride.riot.visible = false;
+      console.warn('riot squad disabled:', e);
     }
   }
   controls.update();
