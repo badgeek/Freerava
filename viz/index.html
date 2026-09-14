@@ -1035,6 +1035,11 @@ const RIOT = {
   gasEvery: 0.12,         // seconds between tear-gas puffs
 };
 let riotOn = true;
+// Phones get a thinner apocalypse: an officer is 13 meshes and a zombie
+// nine, and a coarse-pointer device is already drawing the map slab. The
+// pools are read once when a ride is built, so trimming the configs here
+// (after COARSE exists) is all it takes.
+if (COARSE) { METEOR.pool = 5; ZOMBIE.pool = 7; RIOT.lines = 1; RIOT.perRow = 5; }
 
 // Hazard stripes for the barricades: diagonal yellow/black on a tiny canvas.
 function stripeTexture() {
