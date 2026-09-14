@@ -108,6 +108,18 @@ Rules that kept this codebase healthy:
   dlsym's OUR lib before libslint_cpp.so; store `NewGlobalRef(clazz)` there
   (`cyclomp_activity()`), then forward to Slint's real entry point.
 - Sensors need NO permission and NO Java (`ASensorManager` C API).
+- The Slint runtime CANNOT be started twice in one process. BACK finishes the
+  activity but Android keeps the process (HOME only pauses — that's why HOME
+  always worked); the recreated activity runs `slint_main` on a FRESH
+  android_main thread, while `slint::private_api::assert_main_thread()` has
+  cached the first thread's id in a function-local `static` that outlived the
+  activity → `SIGABRT` inside `AppWindow::create()` on reopen. Fix: interpose
+  `onDestroy` (same chaining trick as `onPause`) and `_exit(0)` after Slint's
+  handler joins its thread — onPause has already flushed the active ride, so
+  the next launch restores it from SQLite. Corollary: the manifest lists ALL
+  `configChanges` so a config change never triggers that destroy/recreate.
+  NB the abort is `#ifndef NDEBUG`-only, so a Release build hides it and
+  reuses Slint's globals instead — don't "fix" it by shipping Release.
 - Goldfish-emulator GL renderer crashes are ENDEMIC (5 distinct kinds this
   project: calcIndexRange null, DrawableGL under bearing streams, ...).
   The Mali phone never reproduced one. Suspect the emulator first; the

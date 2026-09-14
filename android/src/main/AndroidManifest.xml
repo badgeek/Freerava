@@ -10,11 +10,15 @@
     <application
         android:label="cyclomp"
         android:hasCode="false">
+        <!-- We draw every pixel ourselves and ship no Android resources, so the
+             activity handles ALL config changes in-process. A recreate would
+             destroy the activity and end the process (see cyclomp_on_destroy),
+             and the Slint runtime cannot start twice in one process. -->
         <activity
             android:name="android.app.NativeActivity"
             android:exported="true"
             android:screenOrientation="portrait"
-            android:configChanges="orientation|screenSize|keyboardHidden">
+            android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|density|screenSize|smallestScreenSize|layoutDirection|colorMode">
             <meta-data
                 android:name="android.app.lib_name"
                 android:value="cyclomp" />

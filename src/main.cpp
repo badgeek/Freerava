@@ -215,6 +215,7 @@ void publish_idle(AppWindow &w, bool sensors) {
 #include "android_env.h"
 #include <android/native_activity.h>
 #include <dlfcn.h>
+#include <unistd.h>
 
 namespace {
 JavaVM *g_java_vm = nullptr;
@@ -238,6 +239,21 @@ void cyclomp_on_pause(ANativeActivity *a) {
     g_flush_active();
     if (g_prev_on_pause) g_prev_on_pause(a);
 }
+
+// BACK finishes the activity but Android KEEPS the process — and with it this
+// .so and every global in it. (HOME only pauses, which is why HOME was fine.)
+// The Slint runtime cannot start twice in one process: android-activity runs
+// slint_main on a fresh thread for the recreated activity, while Slint's
+// assert_main_thread() has cached the FIRST thread's id in a function-local
+// static that outlived the activity — so the second AppWindow::create() hits
+// `std::abort()` (SIGABRT in slint::private_api::assert_main_thread).
+// onPause has already flushed the in-progress ride to SQLite by now, so let
+// the process end with the activity; the next launch restores from disk.
+void (*g_prev_on_destroy)(ANativeActivity *) = nullptr;
+void cyclomp_on_destroy(ANativeActivity *a) {
+    if (g_prev_on_destroy) g_prev_on_destroy(a); // joins Slint's app thread
+    _exit(0);                                    // skip static dtors; state is on disk
+}
 } // namespace
 
 extern "C" JNIEXPORT void ANativeActivity_onCreate(
@@ -254,10 +270,14 @@ extern "C" JNIEXPORT void ANativeActivity_onCreate(
     Fn real = h ? (Fn)dlsym(h, "ANativeActivity_onCreate") : nullptr;
     if (real && real != &ANativeActivity_onCreate)
         real(activity, savedState, savedStateSize);
-    // Slint has now installed its lifecycle callbacks; wrap onPause.
+    // Slint has now installed its lifecycle callbacks; wrap onPause/onDestroy.
     if (activity->callbacks && activity->callbacks->onPause != &cyclomp_on_pause) {
         g_prev_on_pause = activity->callbacks->onPause;
         activity->callbacks->onPause = &cyclomp_on_pause;
+    }
+    if (activity->callbacks && activity->callbacks->onDestroy != &cyclomp_on_destroy) {
+        g_prev_on_destroy = activity->callbacks->onDestroy;
+        activity->callbacks->onDestroy = &cyclomp_on_destroy;
     }
 }
 #endif
