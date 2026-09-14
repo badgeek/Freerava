@@ -12,6 +12,7 @@ add_library(cyclomp_core STATIC
     src/core/format.cpp
     src/core/geojson.cpp
     src/core/mock_telemetry.cpp
+    src/core/photo.cpp
     src/core/ride_engine.cpp
     src/core/session_db.cpp
     src/core/session_store.cpp
@@ -194,6 +195,7 @@ if(NOT ANDROID)
             tests/test_settings.cpp
             tests/test_session_db.cpp
             tests/test_geojson.cpp
+            tests/test_photo.cpp
             tests/test_track.cpp)
         target_link_libraries(cyclomp_tests PRIVATE cyclomp_core doctest::doctest)
         add_test(NAME cyclomp_tests COMMAND cyclomp_tests)
