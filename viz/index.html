@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" class="h-full">
+<html lang="en" class="h-[100dvh]">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -29,7 +29,15 @@
 <style type="text/tailwindcss">
   /* Only what utility classes can't express statically: gradients, the range
      accent, and the JS-toggled .on / .hide / .dragging states. */
-  canvas { display: block; }
+  canvas { display: block; touch-action: none; }
+  /* Horizontal scroll strips (header stats, phone pill row) without a visible
+     scrollbar — the content is self-evidently swipeable. */
+  .no-sb { -ms-overflow-style: none; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .no-sb::-webkit-scrollbar { display: none; }
+  /* Comfortable touch targets for the range sliders on a phone. */
+  @media (pointer: coarse) {
+    #scrub, #exag { height: 22px; }
+  }
   .hide { display: none !important; }
   #vignette { background: radial-gradient(ellipse 75% 65% at 50% 42%,
     rgba(0,0,0,0) 55%, rgba(28,32,44,.055) 78%, rgba(28,32,44,.13) 100%); }
@@ -39,61 +47,64 @@
   body.dragging #dropwell { border-color: #fc5200; background: #fff7f2; }
 </style>
 </head>
-<body class="h-full m-0 overflow-hidden font-sans text-ink bg-canvas">
+<body class="h-[100dvh] m-0 overflow-hidden font-sans text-ink bg-canvas">
 <div id="app" class="fixed inset-0"></div>
 <div id="vignette" class="fixed inset-0 pointer-events-none z-[1]"></div>
 
 <header id="header" style="display:none"
   class="fixed top-0 inset-x-0 z-[3] bg-white/80 backdrop-blur-md backdrop-saturate-150
          border-b border-bd shadow-[0_6px_20px_rgba(20,20,30,.05)]">
-  <div class="w-full px-6 py-2.5 flex items-center gap-5 flex-wrap">
-    <div class="flex items-center gap-3 min-w-0 shrink-0">
-      <span class="w-[5px] h-[30px] rounded-[3px] shrink-0 bg-gradient-to-b from-accent to-accentd"></span>
+  <div class="w-full px-3 sm:px-6 py-2 sm:py-2.5 flex items-center gap-3 sm:gap-5 flex-wrap">
+    <div class="flex items-center gap-2.5 sm:gap-3 min-w-0 shrink-0">
+      <span class="w-[4px] sm:w-[5px] h-[26px] sm:h-[30px] rounded-[3px] shrink-0 bg-gradient-to-b from-accent to-accentd"></span>
       <div class="min-w-0">
-        <h1 class="text-[15px] font-bold tracking-tight leading-tight m-0 truncate">Ride Viewer</h1>
-        <span id="date" class="block text-muted text-[11.5px] mt-px tabular-nums truncate"></span>
+        <h1 class="text-[13.5px] sm:text-[15px] font-bold tracking-tight leading-tight m-0 truncate">Ride Viewer</h1>
+        <span id="date" class="block text-muted text-[11px] sm:text-[11.5px] mt-px tabular-nums truncate"></span>
       </div>
     </div>
 
     <div id="viewmodes" style="display:none"
-      class="mx-auto shrink-0 flex items-center bg-canvas border border-bd rounded-full p-[3px] gap-[2px]">
+      class="order-3 sm:order-none w-full sm:w-auto overflow-x-auto no-sb mx-auto shrink-0 flex items-center bg-canvas border border-bd rounded-full p-[3px] gap-[2px]">
       <button data-mode="map" class="on text-xs font-semibold text-muted rounded-full px-[13px] py-[6px] leading-none whitespace-nowrap transition hover:text-ink">Map</button>
       <button data-mode="hybrid" class="text-xs font-semibold text-muted rounded-full px-[13px] py-[6px] leading-none whitespace-nowrap transition hover:text-ink">Map&nbsp;+&nbsp;Elev</button>
       <button data-mode="grid" class="text-xs font-semibold text-muted rounded-full px-[13px] py-[6px] leading-none whitespace-nowrap transition hover:text-ink">Grid</button>
       <button data-mode="template" class="text-xs font-semibold text-muted rounded-full px-[13px] py-[6px] leading-none whitespace-nowrap transition hover:text-ink">Elevation</button>
     </div>
 
-    <div class="flex items-stretch shrink-0">
-      <div class="px-4 py-0.5">
-        <div class="text-[21px] font-semibold tracking-tight tabular-nums leading-tight whitespace-nowrap text-accent"><span id="s-dist">0.0</span><i class="not-italic text-xs font-semibold text-muted ml-[3px]">km</i></div>
-        <div class="text-[10.5px] text-faint uppercase tracking-wide mt-[3px] font-semibold">Distance</div>
+    <!-- min-w-0 + shrinkable: the six cells are wider than a phone, so this
+         box must be allowed to narrow and scroll internally rather than force
+         the header wider than the viewport. -->
+    <div class="flex items-stretch ml-auto min-w-0 max-w-full overflow-x-auto no-sb">
+      <div class="px-2.5 sm:px-4 py-0.5 shrink-0">
+        <div class="text-[17px] sm:text-[21px] font-semibold tracking-tight tabular-nums leading-tight whitespace-nowrap text-accent"><span id="s-dist">0.0</span><i class="not-italic text-xs font-semibold text-muted ml-[3px]">km</i></div>
+        <div class="text-[9px] sm:text-[10.5px] text-faint uppercase tracking-wide mt-[3px] font-semibold whitespace-nowrap">Distance</div>
       </div>
-      <div class="px-4 py-0.5 border-l border-bd">
-        <div class="text-[21px] font-semibold tracking-tight tabular-nums leading-tight whitespace-nowrap"><span id="s-time">0:00</span></div>
-        <div class="text-[10.5px] text-faint uppercase tracking-wide mt-[3px] font-semibold">Moving Time</div>
+      <div class="px-2.5 sm:px-4 py-0.5 shrink-0 border-l border-bd">
+        <div class="text-[17px] sm:text-[21px] font-semibold tracking-tight tabular-nums leading-tight whitespace-nowrap"><span id="s-time">0:00</span></div>
+        <div class="text-[9px] sm:text-[10.5px] text-faint uppercase tracking-wide mt-[3px] font-semibold whitespace-nowrap">Moving Time</div>
       </div>
-      <div class="px-4 py-0.5 border-l border-bd">
-        <div class="text-[21px] font-semibold tracking-tight tabular-nums leading-tight whitespace-nowrap"><span id="s-avg">0</span><i class="not-italic text-xs font-semibold text-muted ml-[3px]">km/h</i></div>
-        <div class="text-[10.5px] text-faint uppercase tracking-wide mt-[3px] font-semibold">Avg Speed</div>
+      <div class="px-2.5 sm:px-4 py-0.5 shrink-0 border-l border-bd">
+        <div class="text-[17px] sm:text-[21px] font-semibold tracking-tight tabular-nums leading-tight whitespace-nowrap"><span id="s-avg">0</span><i class="not-italic text-xs font-semibold text-muted ml-[3px]">km/h</i></div>
+        <div class="text-[9px] sm:text-[10.5px] text-faint uppercase tracking-wide mt-[3px] font-semibold whitespace-nowrap">Avg Speed</div>
       </div>
-      <div class="px-4 py-0.5 border-l border-bd">
-        <div class="text-[21px] font-semibold tracking-tight tabular-nums leading-tight whitespace-nowrap"><span id="s-max">0</span><i class="not-italic text-xs font-semibold text-muted ml-[3px]">km/h</i></div>
-        <div class="text-[10.5px] text-faint uppercase tracking-wide mt-[3px] font-semibold">Max Speed</div>
+      <div class="px-2.5 sm:px-4 py-0.5 shrink-0 border-l border-bd">
+        <div class="text-[17px] sm:text-[21px] font-semibold tracking-tight tabular-nums leading-tight whitespace-nowrap"><span id="s-max">0</span><i class="not-italic text-xs font-semibold text-muted ml-[3px]">km/h</i></div>
+        <div class="text-[9px] sm:text-[10.5px] text-faint uppercase tracking-wide mt-[3px] font-semibold whitespace-nowrap">Max Speed</div>
       </div>
-      <div class="px-4 py-0.5 border-l border-bd">
-        <div class="text-[21px] font-semibold tracking-tight tabular-nums leading-tight whitespace-nowrap"><span id="s-elev">0</span><i class="not-italic text-xs font-semibold text-muted ml-[3px]">m</i></div>
-        <div class="text-[10.5px] text-faint uppercase tracking-wide mt-[3px] font-semibold">Elev Gain</div>
+      <div class="px-2.5 sm:px-4 py-0.5 shrink-0 border-l border-bd">
+        <div class="text-[17px] sm:text-[21px] font-semibold tracking-tight tabular-nums leading-tight whitespace-nowrap"><span id="s-elev">0</span><i class="not-italic text-xs font-semibold text-muted ml-[3px]">m</i></div>
+        <div class="text-[9px] sm:text-[10.5px] text-faint uppercase tracking-wide mt-[3px] font-semibold whitespace-nowrap">Elev Gain</div>
       </div>
-      <div class="px-4 py-0.5 border-l border-bd">
-        <div class="text-[21px] font-semibold tracking-tight tabular-nums leading-tight whitespace-nowrap"><span id="s-hr">--</span><i class="not-italic text-xs font-semibold text-muted ml-[3px]">bpm</i></div>
-        <div class="text-[10.5px] text-faint uppercase tracking-wide mt-[3px] font-semibold">Avg HR</div>
+      <div class="px-2.5 sm:px-4 py-0.5 shrink-0 border-l border-bd">
+        <div class="text-[17px] sm:text-[21px] font-semibold tracking-tight tabular-nums leading-tight whitespace-nowrap"><span id="s-hr">--</span><i class="not-italic text-xs font-semibold text-muted ml-[3px]">bpm</i></div>
+        <div class="text-[9px] sm:text-[10.5px] text-faint uppercase tracking-wide mt-[3px] font-semibold whitespace-nowrap">Avg HR</div>
       </div>
     </div>
   </div>
 </header>
 
 <div id="legend" style="display:none"
-  class="fixed left-6 bottom-[104px] z-[3] w-[200px] bg-card border border-bd rounded-[10px] shadow-card px-[14px] py-[10px]">
+  class="fixed left-3 sm:left-6 bottom-[136px] sm:bottom-[104px] z-[3] w-[150px] sm:w-[200px] bg-card border border-bd rounded-[10px] shadow-card px-2.5 sm:px-[14px] py-2 sm:py-[10px]">
   <div class="text-[11px] text-muted uppercase tracking-wide mb-1.5">Speed</div>
   <div id="legendbar" class="h-2 rounded"></div>
   <div class="flex justify-between text-muted text-[11px] mt-1 tabular-nums">
@@ -101,41 +112,50 @@
 </div>
 
 <div id="hint" style="display:none"
-  class="fixed right-6 bottom-[104px] z-[3] bg-card border border-bd rounded-[10px] shadow-card text-muted text-[11.5px] px-3 py-2">Drag to orbit &nbsp;·&nbsp; scroll to zoom</div>
+  class="hidden sm:block fixed right-6 bottom-[104px] z-[3] bg-card border border-bd rounded-[10px] shadow-card text-muted text-[11.5px] px-3 py-2">Drag to orbit &nbsp;·&nbsp; scroll to zoom</div>
 <div id="attrib" style="display:none"
-  class="fixed right-6 bottom-[74px] z-[3] bg-white/85 border border-bd rounded-md text-faint text-[10px] px-2 py-[3px] [&_a]:text-muted [&_a]:no-underline"></div>
+  class="fixed right-3 sm:right-6 bottom-[136px] sm:bottom-[74px] z-[3] bg-white/85 border border-bd rounded-md text-faint text-[10px] px-2 py-[3px] [&_a]:text-muted [&_a]:no-underline"></div>
 
+<!-- Phone: two rows inside one rounded card (transport, then a scrollable pill
+     strip). Desktop (sm+): the original single row. -->
 <div id="transport" style="display:none"
-  class="fixed left-1/2 -translate-x-1/2 bottom-6 z-[3] w-[min(720px,calc(100%-48px))]
-         flex items-center gap-[14px] bg-card border border-bd rounded-full shadow-card pl-[10px] pr-[18px] py-[10px]">
-  <button id="play" aria-label="Play"
-    class="w-11 h-11 shrink-0 rounded-full bg-accent hover:bg-accentd text-white text-[15px]
-           grid place-items-center transition-colors">&#9654;</button>
-  <input id="scrub" type="range" min="0" max="1000" value="1000" class="flex-1" />
-  <span id="clock" class="text-ink text-sm font-semibold min-w-[52px] text-right tabular-nums">0:00</span>
-  <button id="speed" title="Playback speed"
-    class="pill text-[12.5px] font-semibold text-muted border border-bd rounded-full px-[13px] py-[7px]
-           min-w-[54px] tabular-nums whitespace-nowrap transition hover:border-faint hover:text-ink">6&times;</button>
-  <button id="follow"
-    class="pill text-[12.5px] font-semibold text-muted border border-bd rounded-full px-[13px] py-[7px]
-           whitespace-nowrap transition hover:border-faint hover:text-ink">Chase cam</button>
-  <button id="meteors" title="Meteor shower ahead of the rider"
-    class="pill on text-[12.5px] font-semibold text-muted border border-bd rounded-full px-[13px] py-[7px]
-           whitespace-nowrap transition hover:border-faint hover:text-ink">Meteors</button>
-  <span id="reliefctl" class="flex items-center gap-[7px] text-muted text-[11.5px] font-semibold uppercase tracking-wide whitespace-nowrap">
-    Relief <input id="exag" type="range" min="0" max="40" value="12" class="w-20" /></span>
+  class="fixed left-1/2 -translate-x-1/2 bottom-3 sm:bottom-6 z-[3]
+         w-[calc(100%-16px)] sm:w-[min(720px,calc(100%-48px))]
+         flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-[14px]
+         bg-card border border-bd rounded-2xl sm:rounded-full shadow-card
+         px-2 sm:pl-[10px] sm:pr-[18px] py-2 sm:py-[10px]">
+  <div class="flex items-center gap-3 sm:contents">
+    <button id="play" aria-label="Play"
+      class="w-11 h-11 shrink-0 rounded-full bg-accent hover:bg-accentd text-white text-[15px]
+             grid place-items-center transition-colors">&#9654;</button>
+    <input id="scrub" type="range" min="0" max="1000" value="1000" class="flex-1 min-w-0" />
+    <span id="clock" class="text-ink text-sm font-semibold min-w-[48px] sm:min-w-[52px] text-right tabular-nums">0:00</span>
+  </div>
+  <div class="flex items-center gap-2 sm:gap-[14px] overflow-x-auto no-sb sm:contents">
+    <button id="speed" title="Playback speed"
+      class="pill shrink-0 text-[12.5px] font-semibold text-muted border border-bd rounded-full px-[13px] py-[7px]
+             min-w-[54px] tabular-nums whitespace-nowrap transition hover:border-faint hover:text-ink">6&times;</button>
+    <button id="follow"
+      class="pill shrink-0 text-[12.5px] font-semibold text-muted border border-bd rounded-full px-[13px] py-[7px]
+             whitespace-nowrap transition hover:border-faint hover:text-ink">Chase cam</button>
+    <button id="meteors" title="Meteor shower ahead of the rider"
+      class="pill on shrink-0 text-[12.5px] font-semibold text-muted border border-bd rounded-full px-[13px] py-[7px]
+             whitespace-nowrap transition hover:border-faint hover:text-ink">Meteors</button>
+    <span id="reliefctl" class="flex shrink-0 items-center gap-[7px] text-muted text-[11.5px] font-semibold uppercase tracking-wide whitespace-nowrap">
+      Relief <input id="exag" type="range" min="0" max="40" value="12" class="w-16 sm:w-20" /></span>
+  </div>
 </div>
 
 <div id="drop"
   class="fixed inset-0 z-[5] flex items-center justify-center bg-canvas/95 cursor-pointer">
-  <div class="bg-card border border-bd rounded-2xl shadow-card px-14 py-11 text-center max-w-[460px]">
-    <div id="dropwell" class="border-2 border-dashed border-bd rounded-xl px-7 py-8 transition">
+  <div class="bg-card border border-bd rounded-2xl shadow-card mx-4 px-6 sm:px-14 py-8 sm:py-11 text-center max-w-[460px]">
+    <div id="dropwell" class="border-2 border-dashed border-bd rounded-xl px-4 sm:px-7 py-6 sm:py-8 transition">
       <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"
         class="w-11 h-11 stroke-accent mb-2.5 mx-auto">
         <path d="M12 16V4m0 0 4 4m-4-4-4 4"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/>
       </svg>
-      <div class="text-[19px] font-bold tracking-tight">Upload your ride</div>
-      <div class="text-muted text-[13.5px] leading-relaxed mt-2">Drop the
+      <div class="text-[17px] sm:text-[19px] font-bold tracking-tight">Upload your ride</div>
+      <div class="text-muted text-[12.5px] sm:text-[13.5px] leading-relaxed mt-2">Drop the
         <code class="bg-canvas border border-bd rounded px-1.5 text-xs">.geojson</code> here, or click to browse.<br/>
         Export one from cyclomp: <strong>Log&nbsp;→ open a ride&nbsp;→ Export</strong>.</div>
       <div id="err" class="text-finish text-[13px] min-h-[18px] mt-2.5 font-medium"></div>
@@ -167,7 +187,10 @@ const COL = {
 // ---- scene ----
 const app = document.getElementById('app');
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+// Phones ship DPR 3; rendering the meteor field and the map slab at 3x eats
+// the frame budget for no visible gain, so cap harder on touch devices.
+const COARSE = matchMedia('(pointer: coarse)').matches;
+renderer.setPixelRatio(Math.min(devicePixelRatio, COARSE ? 1.75 : 2));
 app.appendChild(renderer.domElement);
 // Safety net: MapLibre adds a second WebGL context, and a stressed browser
 // can drop ours. Ask for it back rather than going blank.
@@ -1573,7 +1596,10 @@ function showChrome(sum, vMin, vMax) {
   document.getElementById('header').style.display = 'block';
   document.getElementById('legend').style.display = 'block';
   document.getElementById('transport').style.display = 'flex';
-  document.getElementById('hint').style.display = 'block';
+  // The hint talks about dragging and scrolling — meaningless on touch, and
+  // an inline display would beat the `hidden sm:block` class anyway.
+  document.getElementById('hint').style.display =
+    matchMedia('(pointer: fine)').matches ? 'block' : 'none';
   document.getElementById('viewmodes').style.display = 'flex';
   const d = sum.ended_at ? new Date(sum.ended_at * 1000) : null;
   document.getElementById('date').textContent = d
