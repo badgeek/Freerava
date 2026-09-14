@@ -141,6 +141,9 @@
     <button id="meteors" title="Meteor shower ahead of the rider"
       class="pill on shrink-0 text-[12.5px] font-semibold text-muted border border-bd rounded-full px-[13px] py-[7px]
              whitespace-nowrap transition hover:border-faint hover:text-ink">Meteors</button>
+    <button id="zombies" title="Zombie horde chasing the rider"
+      class="pill on shrink-0 text-[12.5px] font-semibold text-muted border border-bd rounded-full px-[13px] py-[7px]
+             whitespace-nowrap transition hover:border-faint hover:text-ink">Zombies</button>
     <span id="reliefctl" class="flex shrink-0 items-center gap-[7px] text-muted text-[11.5px] font-semibold uppercase tracking-wide whitespace-nowrap">
       Relief <input id="exag" type="range" min="0" max="40" value="12" class="w-16 sm:w-20" /></span>
   </div>
@@ -335,7 +338,7 @@ function clearRide() {
   for (const o of [ride.route, ride.curtain, ride.head, ride.startDot,
                    ride.endDot, ride.terrain, ride.wire, ride.skirt, ride.cap,
                    ride.shadow, ride.base, ride.detail, ride.slab,
-                   ride.meteors])
+                   ride.meteors, ride.zombies])
     disposeObj(o);
   grid.visible = true;
   document.getElementById('attrib').style.display = 'none';
@@ -712,42 +715,284 @@ function resetMeteors(sim) {
 function meteorTick(dt) {
   const g = ride, fld = g?.meteors; if (!fld) return;
   const sim = fld.sim;
-  if (!meteorsOn) { // one clearing pass, then nothing until switched back on
+  // Off: one clearing pass, then only the puff pools keep ticking (the
+  // zombies borrow the smoke pool for their dust).
+  if (!meteorsOn) {
     if (!sim.cleared) { resetMeteors(sim); sim.cleared = true; }
-    return;
-  }
-  sim.cleared = false;
-  const u = sim.u;
-  // The head marker exists only after the first full build; hold off until
-  // there is a bike to fall ahead of.
-  if (g.head && g.headPos) {
-    sim.spawnIn -= dt;
-    if (sim.spawnIn <= 0) {
-      sim.spawnIn = rnd(0.5, 1.5) / (playing ? METEOR.rate : METEOR.idleRate);
-      let rk = null;
-      for (const r of sim.rocks) if (!r.live) { rk = r; break; }
-      if (rk) spawnMeteor(g, sim, rk);
+  } else {
+    sim.cleared = false;
+    const u = sim.u;
+    // The head marker exists only after the first full build; hold off
+    // until there is a bike to fall ahead of.
+    if (g.head && g.headPos) {
+      sim.spawnIn -= dt;
+      if (sim.spawnIn <= 0) {
+        sim.spawnIn = rnd(0.5, 1.5) / (playing ? METEOR.rate : METEOR.idleRate);
+        let rk = null;
+        for (const r of sim.rocks) if (!r.live) { rk = r; break; }
+        if (rk) spawnMeteor(g, sim, rk);
+      }
     }
-  }
-  for (const rk of sim.rocks) {
-    if (!rk.live) continue;
-    rk.t += dt;
-    rk.last.copy(rk.pos);
-    rk.vel.y -= rk.grav * dt;
-    rk.pos.addScaledVector(rk.vel, dt);
-    rk.mesh.position.copy(rk.pos);
-    rk.mesh.rotation.x += rk.spin.x * dt;
-    rk.mesh.rotation.y += rk.spin.y * dt;
-    rk.mesh.rotation.z += rk.spin.z * dt;
-    rk.fireAcc = trailAlong(rk, rk.fireAcc, METEOR.fireStep * u, sim.fire, 0, u);
-    rk.smokeAcc = trailAlong(rk, rk.smokeAcc, METEOR.smokeStep * u, sim.smoke, 2, u);
-    // Land on the real surface (a hill can rise above the aimed-at ground),
-    // with a time cap so a rock can never fall forever off the slab.
-    if (rk.pos.y <= groundY(g, rk.pos.x, rk.pos.z) + rk.r * 0.3 || rk.t > rk.dur * 1.6)
-      impact(sim, rk);
+    for (const rk of sim.rocks) {
+      if (!rk.live) continue;
+      rk.t += dt;
+      rk.last.copy(rk.pos);
+      rk.vel.y -= rk.grav * dt;
+      rk.pos.addScaledVector(rk.vel, dt);
+      rk.mesh.position.copy(rk.pos);
+      rk.mesh.rotation.x += rk.spin.x * dt;
+      rk.mesh.rotation.y += rk.spin.y * dt;
+      rk.mesh.rotation.z += rk.spin.z * dt;
+      rk.fireAcc = trailAlong(rk, rk.fireAcc, METEOR.fireStep * u, sim.fire, 0, u);
+      rk.smokeAcc = trailAlong(rk, rk.smokeAcc, METEOR.smokeStep * u, sim.smoke, 2, u);
+      // Land on the real surface (a hill can rise above the aimed-at
+      // ground), with a time cap so a rock can never fall forever off the slab.
+      if (rk.pos.y <= groundY(g, rk.pos.x, rk.pos.z) + rk.r * 0.3 || rk.t > rk.dur * 1.6)
+        impact(sim, rk);
+    }
   }
   updatePuffs(sim.fire, dt);
   updatePuffs(sim.smoke, dt);
+}
+
+// ---- Zombie horde ---------------------------------------------------------
+// The other half of the apocalypse: blocky low-poly zombies claw their way
+// out of the ground ahead of the rider, shamble after the bike, lunge as it
+// passes, miss, topple and sink back into the earth. Same discipline as the
+// meteors: one fixed pool per ride, nothing allocated in the loop, every
+// size in bike units. Unlit — the boxes keep their form through a per-face
+// shade baked into ONE shared box geometry that every material multiplies
+// (material.color x vertex colour), so a whole walker is nine meshes of the
+// same geometry at different scales. Dust reuses the meteor smoke pool.
+const ZOMBIE = {
+  pool: 12,             // walkers on the ground at once (hard cap)
+  rate: 2.2,            // spawns per second while playing
+  idleRate: 0.35,       // ... while paused
+  ahead: [25, 70],      // rise this far ahead of the bike (bike units)
+  lateral: [9, 40],     // and this far off the route, either side
+  height: 14,           // standing height (bike ~11 long, saddle at 10)
+  chase: 0.62,          // ground speed as a fraction of the bike's
+  minSpeed: 4,          // floor, so a paused ride still gets shamblers
+  maxSpeed: 40,
+  lunge: 7,             // leap once within this distance of the bike
+  chaseFor: 7,          // give up after this many seconds and sink
+  dropBehind: 90,       // ... or once this far behind the bike
+  rise: 0.8, lungeFor: 0.45, fallFor: 0.5, sinkFor: 1.2, // phase lengths (s)
+};
+let zombiesOn = true;
+
+// Unit box with the shading baked in: 24 verts, four per face, in three's
+// +x -x +y -y +z -z order. Top brightest, the four sides stepped so no two
+// adjacent faces share a tone, bottom darkest — the unlit boxes still read
+// as solids from any angle.
+function shadedBoxGeometry() {
+  const geo = new THREE.BoxGeometry(1, 1, 1);
+  const shade = [0.86, 0.74, 1.0, 0.55, 0.8, 0.68];
+  const col = new Float32Array(24 * 3);
+  for (let f = 0; f < 6; f++) for (let v = 0; v < 4; v++)
+    col.fill(shade[f], (f * 4 + v) * 3, (f * 4 + v) * 3 + 3);
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  return geo;
+}
+
+// One walker, facing +X like the bike. Legs and arms hang from pivot groups
+// so they can swing; the body pivots at the hip for the lean, bob and sway.
+function makeZombie(geo, mats, v) {
+  const box = (mat, sx, sy, sz, x, y, z, parent) => {
+    const m = new THREE.Mesh(geo, mat);
+    m.scale.set(sx, sy, sz); m.position.set(x, y, z);
+    parent.add(m); return m;
+  };
+  const root = new THREE.Group();
+  const H = ZOMBIE.height * v.tall, w = v.wide;
+  const legH = H * 0.36, torsoH = H * 0.36, headS = H * 0.17, armH = H * 0.34;
+  const legL = new THREE.Group(), legR = new THREE.Group();
+  legL.position.set(0, legH, 0.95 * w); legR.position.set(0, legH, -0.95 * w);
+  box(mats.pants, 1.3 * w, legH, 1.3 * w, 0, -legH / 2, 0, legL);
+  box(mats.pants, 1.3 * w, legH, 1.3 * w, 0, -legH / 2, 0, legR);
+  root.add(legL, legR);
+  const body = new THREE.Group(); body.position.y = legH; root.add(body);
+  box(v.shirt, 2.4 * w, torsoH, 3.6 * w, 0, torsoH / 2, 0, body);
+  const head = new THREE.Group();
+  head.position.set(0, torsoH + headS / 2 + 0.15, 0);
+  head.rotation.x = v.tilt; // a cocked head is most of the "wrong" in a zombie
+  body.add(head);
+  box(mats.skin, headS, headS, headS, 0, 0, 0, head);
+  const eye = headS * 0.18;
+  box(mats.dark, eye, eye * 0.8, eye, headS / 2, headS * 0.08, headS * 0.24, head);
+  box(mats.dark, eye, eye * 0.8, eye, headS / 2, headS * 0.08, -headS * 0.24, head);
+  if (v.hair) box(mats.dark, headS * 0.9, headS * 0.28, headS * 1.04, -headS * 0.08, headS * 0.5, 0, head);
+  const armL = new THREE.Group(), armR = new THREE.Group();
+  armL.position.set(0, torsoH * 0.92, 2.2 * w); armR.position.set(0, torsoH * 0.92, -2.2 * w);
+  box(v.shirt, 1.05 * w, armH * 0.45, 1.05 * w, 0, -armH * 0.225, 0, armL); // sleeve
+  box(mats.skin, 0.95 * w, armH * 0.55, 0.95 * w, 0, -armH * 0.725, 0, armL);
+  box(v.shirt, 1.05 * w, armH * 0.45, 1.05 * w, 0, -armH * 0.225, 0, armR);
+  box(mats.skin, 0.95 * w, armH * 0.55, 0.95 * w, 0, -armH * 0.725, 0, armR);
+  body.add(armL, armR);
+  root.visible = false;
+  return { root, body, head, legL, legR, armL, armR, H, legH, lean: v.lean,
+           live: false, state: 0, t: 0, phase: rnd(0, 6.28), mult: rnd(0.8, 1.2),
+           pos: new THREE.Vector3(), yaw: 0 };
+}
+
+// Procedural shamble. phase advances with time; reach (0..1) pushes the
+// arms out for the lunge. Rotations are about local Z because the walker
+// faces +X: a negative body Z is a lean FORWARD.
+function poseZombie(zb, reach) {
+  const p = zb.phase, s = Math.sin(p);
+  zb.legL.rotation.z = s * 0.55;
+  zb.legR.rotation.z = -s * 0.55;
+  zb.body.position.y = zb.legH + Math.abs(s) * zb.H * 0.025;
+  zb.body.rotation.z = -(zb.lean + reach * 0.35 + Math.sin(p * 0.5) * 0.06);
+  zb.body.rotation.x = s * 0.07;
+  zb.armL.rotation.z = Math.PI / 2 - 0.3 + Math.sin(p + 0.6) * 0.12 + reach * 0.4;
+  zb.armR.rotation.z = Math.PI / 2 - 0.15 + Math.sin(p - 0.4) * 0.12 + reach * 0.4;
+}
+
+function makeZombieHorde(g) {
+  const grp = new THREE.Group();
+  const geo = shadedBoxGeometry();
+  const mk = c => new THREE.MeshBasicMaterial({ color: c, vertexColors: true });
+  const mats = { skin: mk(0x93b27c), pants: mk(0x45424c), dark: mk(0x1e1e24),
+                 shirts: [mk(0x5f6d7c), mk(0x7a6552), mk(0x6b5f74), mk(0x8a6a6a)] };
+  const walkers = [];
+  for (let i = 0; i < ZOMBIE.pool; i++) {
+    const zb = makeZombie(geo, mats, {
+      tall: rnd(0.85, 1.1), wide: rnd(0.85, 1.2), lean: rnd(0.15, 0.45),
+      tilt: rnd(-0.25, 0.25), hair: Math.random() < 0.6,
+      shirt: mats.shirts[i % mats.shirts.length] });
+    grp.add(zb.root);
+    walkers.push(zb);
+  }
+  scene.add(grp);
+  grp.sim = { u: g.mScale, walkers, spawnIn: 0.3, cleared: false,
+              bikeSpeed: 0, lastHead: new THREE.Vector3() };
+  return grp;
+}
+
+// Shortest-way turn with the delta normalised BEFORE the >180 wrap — the
+// unnormalised version is the classic "does nothing forever" heading bug.
+function turnToward(cur, target, maxStep) {
+  let d = (target - cur) % (2 * Math.PI);
+  if (d > Math.PI) d -= 2 * Math.PI; else if (d < -Math.PI) d += 2 * Math.PI;
+  return cur + Math.max(-maxStep, Math.min(maxStep, d));
+}
+
+// Ground dust from the meteor smoke pool (kind 3). Silently nothing when the
+// shower has been torn down or never built.
+function dustPuff(g, x, y, z, r, n) {
+  const pool = g.meteors?.sim?.smoke; if (!pool) return;
+  const u = g.mScale || 1;
+  for (let i = 0; i < n; i++) {
+    const a = rnd(0, 6.28), s = rnd(2, 6) * u;
+    emitPuff(pool, x, y, z, Math.cos(a) * s, rnd(1, 3) * u, Math.sin(a) * s,
+             rnd(0.7, 1.2), r * 0.8, r * 3, 3);
+  }
+}
+
+const ZS = { RISE: 0, CHASE: 1, LUNGE: 2, FALL: 3, SINK: 4 };
+function spawnZombie(g, sim, zb) {
+  const u = sim.u, hp = g.headPos, ry = g.head.rotation.y;
+  const fx = Math.cos(ry), fz = -Math.sin(ry);
+  const ahead = rnd(ZOMBIE.ahead[0], ZOMBIE.ahead[1]) * u;
+  const side = (Math.random() < 0.5 ? -1 : 1) * rnd(ZOMBIE.lateral[0], ZOMBIE.lateral[1]) * u;
+  const x = hp.x + fx * ahead - fz * side, z = hp.z + fz * ahead + fx * side;
+  const gy = groundY(g, x, z);
+  zb.pos.set(x, gy, z);
+  zb.yaw = Math.atan2(-(hp.z - z), hp.x - x); // face the bike as it comes
+  zb.root.position.set(x, gy - zb.H * u, z);
+  zb.root.rotation.set(0, zb.yaw, 0);
+  zb.root.scale.setScalar(u);
+  zb.root.visible = true;
+  zb.live = true; zb.state = ZS.RISE; zb.t = 0;
+  dustPuff(g, x, gy, z, zb.H * u * 0.25, 6);
+}
+
+function resetZombies(sim) {
+  for (const zb of sim.walkers) { zb.live = false; zb.root.visible = false; }
+}
+
+function zombieTick(dt) {
+  const g = ride, fld = g?.zombies; if (!fld) return;
+  const sim = fld.sim;
+  if (!zombiesOn) {
+    if (!sim.cleared) { resetZombies(sim); sim.cleared = true; }
+    return;
+  }
+  sim.cleared = false;
+  const u = sim.u, hp = g.headPos, ready = !!(g.head && hp);
+  let fx = 1, fz = 0;
+  if (ready) {
+    // Bike ground speed, smoothed and capped: a scrub jump would otherwise
+    // read as warp speed and the horde would sprint for a second.
+    const step = Math.min(60 * u, hp.distanceTo(sim.lastHead) / Math.max(dt, 1e-3));
+    sim.bikeSpeed += (step - sim.bikeSpeed) * 0.15;
+    sim.lastHead.copy(hp);
+    fx = Math.cos(g.head.rotation.y); fz = -Math.sin(g.head.rotation.y);
+    sim.spawnIn -= dt;
+    if (sim.spawnIn <= 0) {
+      sim.spawnIn = rnd(0.5, 1.5) / (playing ? ZOMBIE.rate : ZOMBIE.idleRate);
+      let zb = null;
+      for (const w of sim.walkers) if (!w.live) { zb = w; break; }
+      if (zb) spawnZombie(g, sim, zb);
+    }
+  }
+  // Chase speed follows the bike so the horde never catches it but is never
+  // static either: paused rides get a slow shamble from the floor.
+  const speed = Math.min(ZOMBIE.maxSpeed * u,
+                         Math.max(ZOMBIE.minSpeed * u, ZOMBIE.chase * sim.bikeSpeed));
+  for (const zb of sim.walkers) {
+    if (!zb.live) continue;
+    zb.t += dt;
+    const H = zb.H * u, r = zb.root, p = zb.pos;
+    let reach = 0;
+    if (zb.state === ZS.RISE) {
+      const k = Math.min(1, zb.t / ZOMBIE.rise);
+      r.position.y = p.y - H * (1 - k) * (1 - k); // eases out as it surfaces
+      zb.phase += dt * 3; reach = 0.6;
+      if (k >= 1) { zb.state = ZS.CHASE; zb.t = 0; }
+    } else if (zb.state === ZS.CHASE) {
+      zb.phase += dt * 7;
+      if (ready) {
+        const dx = hp.x - p.x, dz = hp.z - p.z, dist = Math.hypot(dx, dz);
+        zb.yaw = turnToward(zb.yaw, Math.atan2(-dz, dx), 2.5 * dt);
+        const v = speed * zb.mult * dt;
+        p.x += Math.cos(zb.yaw) * v; p.z -= Math.sin(zb.yaw) * v;
+        p.y = groundY(g, p.x, p.z);
+        reach = Math.max(0, 1 - dist / (ZOMBIE.lunge * 3 * u)) * 0.5;
+        const behind = (p.x - hp.x) * fx + (p.z - hp.z) * fz;
+        if (dist < ZOMBIE.lunge * u) { zb.state = ZS.LUNGE; zb.t = 0; }
+        else if (zb.t > ZOMBIE.chaseFor || behind < -ZOMBIE.dropBehind * u) {
+          zb.state = ZS.SINK; zb.t = 0;
+          dustPuff(g, p.x, p.y, p.z, H * 0.2, 3);
+        }
+      }
+      r.position.set(p.x, p.y, p.z);
+      r.rotation.y = zb.yaw;
+    } else if (zb.state === ZS.LUNGE) {
+      // A leap along the current heading with a small hop; the bike has
+      // moved on by the time it lands, which is the whole joke.
+      const k = Math.min(1, zb.t / ZOMBIE.lungeFor);
+      const v = speed * 2.2 * dt;
+      p.x += Math.cos(zb.yaw) * v; p.z -= Math.sin(zb.yaw) * v;
+      p.y = groundY(g, p.x, p.z);
+      r.position.set(p.x, p.y + Math.sin(k * Math.PI) * H * 0.2, p.z);
+      reach = 1; zb.phase += dt * 2;
+      if (k >= 1) { zb.state = ZS.FALL; zb.t = 0; }
+    } else if (zb.state === ZS.FALL) {
+      // Topple face first: a negative root Z tips the top toward +X.
+      const k = Math.min(1, zb.t / ZOMBIE.fallFor);
+      r.rotation.z = -k * k * Math.PI / 2;
+      r.position.y = p.y;
+      reach = 1;
+      if (k >= 1) { zb.state = ZS.SINK; zb.t = 0; dustPuff(g, p.x, p.y, p.z, H * 0.25, 5); }
+    } else { // SINK
+      const k = Math.min(1, zb.t / ZOMBIE.sinkFor);
+      r.position.y = p.y - H * k;
+      if (k >= 1) { zb.live = false; r.visible = false; r.rotation.z = 0; }
+    }
+    poseZombie(zb, reach);
+  }
 }
 
 function buildRide(gj) {
@@ -782,6 +1027,7 @@ function buildRide(gj) {
   g.head = makeBike();
   for (const m of [g.startDot, g.endDot, g.head]) m.scale.setScalar(g.mScale);
   g.meteors = makeMeteorField(g); // sized from mScale, so it comes after it
+  g.zombies = makeZombieHorde(g);
   g.startDot.position.copy(g.drawn[0]);
   g.endDot.position.copy(g.drawn[g.drawn.length - 1]);
 
@@ -1683,6 +1929,9 @@ document.getElementById('meteors').addEventListener('click', e => {
   meteorsOn = !meteorsOn; e.target.classList.toggle('on', meteorsOn);
   // the field clears itself on its next tick (meteorTick)
 });
+document.getElementById('zombies').addEventListener('click', e => {
+  zombiesOn = !zombiesOn; e.target.classList.toggle('on', zombiesOn);
+});
 document.getElementById('exag').addEventListener('input', e => {
   exag = Number(e.target.value);
   if (!ride) return;
@@ -1716,6 +1965,14 @@ function animate(now) {
       ride.meteorsBroken = true;
       if (ride.meteors) ride.meteors.visible = false;
       console.warn('meteor shower disabled:', e);
+    }
+  }
+  if (ride && !ride.zombiesBroken) {
+    try { zombieTick(dt); }
+    catch (e) {
+      ride.zombiesBroken = true;
+      if (ride.zombies) ride.zombies.visible = false;
+      console.warn('zombie horde disabled:', e);
     }
   }
   controls.update();
