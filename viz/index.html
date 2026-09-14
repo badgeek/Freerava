@@ -144,9 +144,6 @@
     <button id="zombies" title="Zombie horde chasing the rider"
       class="pill on shrink-0 text-[12.5px] font-semibold text-muted border border-bd rounded-full px-[13px] py-[7px]
              whitespace-nowrap transition hover:border-faint hover:text-ink">Zombies</button>
-    <button id="maung" title="Maung convoy on the rider's tail"
-      class="pill on shrink-0 text-[12.5px] font-semibold text-muted border border-bd rounded-full px-[13px] py-[7px]
-             whitespace-nowrap transition hover:border-faint hover:text-ink">Maung</button>
     <span id="reliefctl" class="flex shrink-0 items-center gap-[7px] text-muted text-[11.5px] font-semibold uppercase tracking-wide whitespace-nowrap">
       Relief <input id="exag" type="range" min="0" max="40" value="12" class="w-16 sm:w-20" /></span>
   </div>
@@ -341,7 +338,7 @@ function clearRide() {
   for (const o of [ride.route, ride.curtain, ride.head, ride.startDot,
                    ride.endDot, ride.terrain, ride.wire, ride.skirt, ride.cap,
                    ride.shadow, ride.base, ride.detail, ride.slab,
-                   ride.meteors, ride.zombies, ride.maung])
+                   ride.meteors, ride.zombies])
     disposeObj(o);
   grid.visible = true;
   document.getElementById('attrib').style.display = 'none';
@@ -998,150 +995,6 @@ function zombieTick(dt) {
   }
 }
 
-// ---- Maung convoy ---------------------------------------------------------
-// Third act: a convoy of blocky Pindad Maung 4x4s on the rider's tail. Unlike
-// the zombies they do not free-roam — they drive the ACTUAL route, a fixed
-// path distance behind the bike (with a slow breathing in and out of that
-// gap), so they take every corner the rider took and can never overtake.
-// Same rules as before: fixed pool per ride, no allocation in the loop, all
-// sizes in bike units, unlit (shaded boxes + flat lamp tones, the strobes are
-// a material swap, not a light). Wheel dust goes into the meteor smoke pool.
-const MAUNG = {
-  count: 3,                 // vehicles in the convoy
-  gap: [24, 54, 84],        // path distance behind the bike, per vehicle (bike units)
-  breathe: 3,               // +/- slow drift of that gap, so the tail feels alive
-  lateral: [3, -3, 2.5],    // formation offset off the route line, per vehicle
-  wheelR: 3.2,              // wheel radius; body ~22 long x 9 wide x 12 tall
-  dustStep: 5,              // one dust puff per N units of travel, per vehicle
-  strobe: 0.22,             // seconds per red/blue flip
-};
-let maungOn = true;
-
-function makeMaung(box, wheelGeo, mats) {
-  const root = new THREE.Group();
-  const mesh = (geo, mat, sx, sy, sz, x, y, z, parent = root) => {
-    const m = new THREE.Mesh(geo, mat);
-    m.scale.set(sx, sy, sz); m.position.set(x, y, z);
-    parent.add(m); return m;
-  };
-  const body = new THREE.Group(); root.add(body);
-  const B = (mat, sx, sy, sz, x, y, z) => mesh(box, mat, sx, sy, sz, x, y, z, body);
-  B(mats.olive, 22, 4, 9, 0, 5, 0);            // tub
-  B(mats.oliveHi, 13, 4.6, 8.6, -2.5, 9.2, 0); // cabin
-  B(mats.glass, 12.6, 2, 8.8, -2.5, 9.7, 0);   // window band, proud of the cabin
-  B(mats.olive, 7.5, 1.4, 8.6, 7.5, 7.5, 0);   // hood
-  B(mats.dark, 0.6, 2.6, 6.4, 11.1, 5.8, 0);   // grille
-  B(mats.lamp, 0.5, 1.2, 1.3, 11.15, 6.9, 3);  // headlights: flat lamp tone
-  B(mats.lamp, 0.5, 1.2, 1.3, 11.15, 6.9, -3);
-  B(mats.dark, 1.4, 1, 9.8, 11, 3.4, 0);       // bumper
-  B(mats.dark, 12, 0.5, 8, -2.5, 11.8, 0);     // roof rack
-  B(mats.dark, 1.2, 0.5, 8.6, -8.4, 7.3, 0);   // tailgate lip
-  const strobeL = B(mats.redOn, 1.6, 0.9, 1.6, 0.5, 12.5, 2.2);
-  const strobeR = B(mats.blueOff, 1.6, 0.9, 1.6, 0.5, 12.5, -2.2);
-  // Wheels: cylinder axis along Z (rotated in the geometry), spun about Z.
-  const wheels = [];
-  for (const [x, z] of [[7, 5], [7, -5], [-6.5, 5], [-6.5, -5]]) {
-    const w = mesh(wheelGeo, mats.rubber, MAUNG.wheelR, MAUNG.wheelR, 2.4, x, MAUNG.wheelR, z);
-    mesh(wheelGeo, mats.hub, MAUNG.wheelR * 0.45, MAUNG.wheelR * 0.45, 2.6, x, MAUNG.wheelR, z);
-    wheels.push(w);
-  }
-  const spare = mesh(wheelGeo, mats.rubber, MAUNG.wheelR, MAUNG.wheelR, 2, -11.6, 7.5, 0, body);
-  spare.rotation.y = Math.PI / 2; // axis along X, flat against the tailgate
-  return { root, body, wheels, strobeL, strobeR, s: 0, lastS: 0, dustAcc: 0,
-           pos: new THREE.Vector3(), yaw: 0 };
-}
-
-function makeMaungConvoy(g) {
-  const grp = new THREE.Group();
-  const box = shadedBoxGeometry();
-  const wheelGeo = new THREE.CylinderGeometry(1, 1, 1, 10);
-  wheelGeo.rotateX(Math.PI / 2);
-  const mk = (c, vc = true) => new THREE.MeshBasicMaterial({ color: c, vertexColors: vc });
-  const mats = { olive: mk(0x6b7a4a), oliveHi: mk(0x7b8a58), glass: mk(0x2a3038),
-                 dark: mk(0x2b2b31), lamp: mk(0xf2d36b), rubber: mk(0x232326, false),
-                 hub: mk(0x8a8f96, false),
-                 redOn: mk(0xe0242c), redOff: mk(0x5a1a1e), blueOn: mk(0x2457e0),
-                 blueOff: mk(0x1a2652) };
-  const cars = [];
-  for (let i = 0; i < MAUNG.count; i++) {
-    const car = makeMaung(box, wheelGeo, mats);
-    car.root.scale.setScalar(g.mScale);
-    car.root.visible = false; // until it has a spot on the route
-    car.phase = i * 2.1;
-    grp.add(car.root);
-    cars.push(car);
-  }
-  grp.visible = maungOn;
-  scene.add(grp);
-  grp.sim = { u: g.mScale, cars, mats, t: 0, blinkIn: MAUNG.strobe, flip: false };
-  return grp;
-}
-
-// Position + heading on the drawn route at path distance s (metres of
-// cumD). Binary search, then interpolate the drawn (view-mode lifted)
-// points so the convoy rides whatever surface the bike rides.
-function trackAt(g, s, out) {
-  const D = g.cumD, P = g.drawn;
-  const n = Math.min(D.length, P.length);
-  s = Math.min(D[n - 1], Math.max(0, s));
-  let lo = 1, hi = n - 1;
-  while (lo < hi) { const mid = (lo + hi) >> 1; if (D[mid] < s) lo = mid + 1; else hi = mid; }
-  const a = P[lo - 1], b = P[lo];
-  const span = D[lo] - D[lo - 1];
-  const f = span > 1e-9 ? (s - D[lo - 1]) / span : 0;
-  out.pos.copy(a).lerp(b, f);
-  const dx = b.x - a.x, dz = b.z - a.z;
-  if (Math.abs(dx) + Math.abs(dz) > 1e-6) out.yaw = Math.atan2(-dz, dx);
-  return out;
-}
-
-function maungTick(dt) {
-  const g = ride, fld = g?.maung; if (!fld || !maungOn) return;
-  const sim = fld.sim, u = sim.u;
-  if (!g.drawn || !g.cumD || g.headDist == null) return;
-  sim.t += dt;
-  // Strobes: swap materials, never a light.
-  sim.blinkIn -= dt;
-  if (sim.blinkIn <= 0) {
-    sim.blinkIn = MAUNG.strobe; sim.flip = !sim.flip;
-    const m = sim.mats;
-    for (const car of sim.cars) {
-      car.strobeL.material = sim.flip ? m.redOn : m.redOff;
-      car.strobeR.material = sim.flip ? m.blueOff : m.blueOn;
-    }
-  }
-  for (let i = 0; i < sim.cars.length; i++) {
-    const car = sim.cars[i];
-    // Target spot: a breathing gap behind the bike. Before the bike is that
-    // far into the ride the convoy waits at the start line.
-    const gap = (MAUNG.gap[i] + Math.sin(sim.t * 0.45 + car.phase) * MAUNG.breathe) * u;
-    const s = Math.max(0, g.headDist - gap);
-    car.lastS = car.s; car.s = s;
-    trackAt(g, s, car);
-    // Formation: slide off the route line along the local right vector.
-    const fx = Math.cos(car.yaw), fz = -Math.sin(car.yaw);
-    const off = MAUNG.lateral[i] * u;
-    car.pos.x += -fz * off; car.pos.z += fx * off;
-    car.root.position.copy(car.pos);
-    car.root.rotation.y = car.yaw;
-    car.root.visible = true;
-    // Wheels roll with the distance actually covered; the body bobs a
-    // touch with speed so a moving convoy never looks like a slide.
-    const ds = car.s - car.lastS;
-    const spin = ds / (MAUNG.wheelR * u);
-    for (const w of car.wheels) w.rotation.z -= spin;
-    const v = Math.abs(ds) / Math.max(dt, 1e-3);
-    car.body.position.y = Math.sin(sim.t * 11 + car.phase) * Math.min(0.25, v / (60 * u));
-    // Dust from the rear axle, one puff per dustStep units of travel.
-    car.dustAcc += Math.abs(ds);
-    const step = MAUNG.dustStep * u;
-    if (car.dustAcc >= step && v > 2 * u) {
-      car.dustAcc %= step;
-      dustPuff(g, car.pos.x - fx * 7 * u, car.pos.y, car.pos.z - fz * 7 * u, 2.5 * u, 1);
-    }
-  }
-}
-
 function buildRide(gj) {
   clearRide();
   const feat = (gj.features || []).find(f => f.geometry?.type === 'LineString');
@@ -1175,7 +1028,6 @@ function buildRide(gj) {
   for (const m of [g.startDot, g.endDot, g.head]) m.scale.setScalar(g.mScale);
   g.meteors = makeMeteorField(g); // sized from mScale, so it comes after it
   g.zombies = makeZombieHorde(g);
-  g.maung = makeMaungConvoy(g);
   g.startDot.position.copy(g.drawn[0]);
   g.endDot.position.copy(g.drawn[g.drawn.length - 1]);
 
@@ -1956,8 +1808,6 @@ function setProgress(frac) {
     g.head.rotation.y = Math.atan2(-dzw, dxw);
 
   g.headPos = hp;
-  // Path distance of the bike, for anything that trails it ALONG the route.
-  g.headDist = g.cumD[i - 1] + (g.cumD[Math.min(i, g.cumD.length - 1)] - g.cumD[i - 1]) * f;
   // Chase cam: translate BOTH the orbit target and the camera by the same
   // delta. That follows the bike while leaving the offset vector — i.e. the
   // angle and distance the user set by dragging and scrolling — untouched,
@@ -2082,10 +1932,6 @@ document.getElementById('meteors').addEventListener('click', e => {
 document.getElementById('zombies').addEventListener('click', e => {
   zombiesOn = !zombiesOn; e.target.classList.toggle('on', zombiesOn);
 });
-document.getElementById('maung').addEventListener('click', e => {
-  maungOn = !maungOn; e.target.classList.toggle('on', maungOn);
-  if (ride?.maung) ride.maung.visible = maungOn;
-});
 document.getElementById('exag').addEventListener('input', e => {
   exag = Number(e.target.value);
   if (!ride) return;
@@ -2127,14 +1973,6 @@ function animate(now) {
       ride.zombiesBroken = true;
       if (ride.zombies) ride.zombies.visible = false;
       console.warn('zombie horde disabled:', e);
-    }
-  }
-  if (ride && !ride.maungBroken) {
-    try { maungTick(dt); }
-    catch (e) {
-      ride.maungBroken = true;
-      if (ride.maung) ride.maung.visible = false;
-      console.warn('maung convoy disabled:', e);
     }
   }
   controls.update();
