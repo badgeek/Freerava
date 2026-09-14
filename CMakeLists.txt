@@ -129,6 +129,8 @@ if(ANDROID)
     # Ride selfies: NDK Camera2 + AImageReader, both plain C APIs (no Java).
     target_sources(cyclomp PRIVATE src/camera_android.cpp)
     target_link_libraries(cyclomp PRIVATE camera2ndk mediandk)
+    # Foreground service control (start/stop the one Java component over JNI).
+    target_sources(cyclomp PRIVATE src/ride_service_android.cpp)
     if(EXISTS "${_mln_build_android}/libmbgl-core.a")
         message(STATUS "cyclomp: MapLibre map enabled for Android (${_mln_build_android})")
         if(CYCLOMP_MAP_GL)

@@ -7,6 +7,13 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <!-- Ride selfies (NDK Camera2; requested at runtime). -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Background ride recording: a foreground Service (RideService) lifts the
+         API 26+ background-location throttle and drops the process kill score. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <!-- The ongoing notification is mandatory for a foreground service; runtime
+         permission on API 33+, requested at first ride start. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Not required: the computer is fully usable on a phone without one. -->
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
     <uses-feature android:name="android.hardware.camera.front" android:required="false" />
@@ -14,7 +21,7 @@
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
     <application
         android:label="cyclomp"
-        android:hasCode="false">
+        android:hasCode="true">
         <!-- We draw every pixel ourselves and ship no Android resources, so the
              activity handles ALL config changes in-process. A recreate would
              destroy the activity and end the process (see cyclomp_on_destroy),
@@ -32,5 +39,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- Keeps recording alive while the app is backgrounded. Not exported;
+             started only from within the app over JNI (ride_service_android.cpp). -->
+        <service
+            android:name=".RideService"
+            android:foregroundServiceType="location"
+            android:exported="false" />
     </application>
 </manifest>
