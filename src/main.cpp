@@ -472,7 +472,8 @@ int main(int, char **)
     }
 
     // Tap on a history row: open the ride-detail page (screen 3).
-    ui->on_select_session([ui = slint::ComponentWeakHandle(ui), log](int i) {
+    ui->on_select_session([ui = slint::ComponentWeakHandle(ui), log,
+                           store](int i) {
         auto u = ui.lock();
         if (!u) return;
         auto &w = **u;
@@ -488,6 +489,37 @@ int main(int, char **)
         // string serves both the chart caption and the PERFORMANCE grid cell.
         w.set_sel_elev_label(slint::SharedString(
             "+" + core::fmt::fmt0(core::elevation_gain_m(rows[i].track)) + " m"));
+        // Gallery: this ride's photos as their own EXIF thumbnails, decoded by
+        // Slint from a sidecar temp file (we link no image library). An empty
+        // model hides the GALLERY tab. Full-res is the fallback for a HAL that
+        // wrote no EXIF thumbnail — rare, and Slint scales it down.
+        auto photos = std::make_shared<slint::VectorModel<PhotoItem>>();
+        std::vector<core::Photo> shots;
+        if (store->ok() && rows[i].id > 0) store->photos_for(rows[i].id, shots);
+        for (const auto &ph : shots) {
+            std::string src = ph.path;
+            const auto thumb = core::exif_thumbnail(ph.path);
+            if (!thumb.empty()) {
+                const std::string tp = ph.path + ".thumb.jpg";
+                if (std::FILE *f = std::fopen(tp.c_str(), "wb")) {
+                    if (std::fwrite(thumb.data(), 1, thumb.size(), f) ==
+                        thumb.size())
+                        src = tp;
+                    std::fclose(f);
+                }
+            }
+            char hhmm[8] = "--:--";
+            if (std::tm *lt = std::localtime(&ph.taken_at))
+                std::strftime(hhmm, sizeof hhmm, "%H:%M", lt);
+            std::string cap =
+                std::string(ph.front ? "SELFIE " : "PHOTO ") + hhmm;
+            if (!ph.has_fix) cap += " - NO FIX";
+            photos->push_back(PhotoItem{
+                slint::Image::load_from_path(slint::SharedString(src)),
+                slint::SharedString(cap)});
+        }
+        w.set_sel_photos(photos);
+
         w.set_selected_session(i);
         w.set_detail_tab(0);
         w.set_replay_playing(false);
